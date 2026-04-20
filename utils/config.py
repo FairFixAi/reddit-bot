@@ -76,6 +76,17 @@ POSTS_PER_RUN = int(get_env_optional("POSTS_PER_RUN") or "100")
 RSS_MAX_POSTS_PER_RUN = int(get_env_optional("RSS_MAX_POSTS_PER_RUN") or str(POSTS_PER_RUN))
 RSS_MAX_SELFTEXT_CHARS = int(get_env_optional("RSS_MAX_SELFTEXT_CHARS") or "50000")
 
+# Reddit rate-limits cloud IPs; space requests and set a descriptive User-Agent (see README).
+RSS_DELAY_BETWEEN_FEEDS_SEC = float(get_env_optional("RSS_DELAY_BETWEEN_FEEDS_SEC") or "3.5")
+RSS_MAX_RETRIES = int(get_env_optional("RSS_MAX_RETRIES") or "4")
+RSS_RETRY_BASE_SLEEP_SEC = float(get_env_optional("RSS_RETRY_BASE_SLEEP_SEC") or "8")
+# Prefer unique string on production, e.g. "myapp/1.0 (by u/yourname; contact@domain.com)"
+RSS_USER_AGENT = (
+    get_env_optional("RSS_USER_AGENT")
+    or get_env_optional("REDDIT_USER_AGENT")
+    or "reddit-bot/1.0 (RSS ingestion; set RSS_USER_AGENT in env)"
+)
+
 # DB insert: commit each chunk (smaller peak RAM than one giant execute_values)
 INSERT_POSTS_CHUNK_SIZE = int(get_env_optional("INSERT_POSTS_CHUNK_SIZE") or "25")
 

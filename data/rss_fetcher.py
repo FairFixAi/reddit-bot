@@ -7,12 +7,16 @@ from datetime import datetime, timezone
 import feedparser
 import requests
 
-from utils.config import RSS_MAX_SELFTEXT_CHARS
+from utils.config import (
+    RSS_MAX_RETRIES,
+    RSS_MAX_SELFTEXT_CHARS,
+    RSS_RETRY_BASE_SLEEP_SEC,
+    RSS_USER_AGENT,
+)
 
 logger = logging.getLogger(__name__)
 
 SOURCE = "reddit_rss"
-USER_AGENT = "RedditRSSBot/1.0 (ingestion pipeline)"
 
 
 def _subreddit_from_feed_url(url: str) -> str:
@@ -55,6 +59,63 @@ def _entry_to_row(entry, subreddit: str) -> dict:
     }
 
 
+def _http_get_feed(url: str) -> requests.Response | None:
+    """
+    GET with retries. Reddit often returns 429 for datacenter IPs when requests are too close together;
+    honors Retry-After and exponential backoff.
+    """
+    headers = {"User-Agent": RSS_USER_AGENT}
+    max_retries = max(1, RSS_MAX_RETRIES)
+    base = max(1.0, RSS_RETRY_BASE_SLEEP_SEC)
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, timeout=45, headers=headers)
+            if resp.status_code == 429:
+                wait = base * (2**attempt)
+                ra = resp.headers.get("Retry-After")
+                if ra is not None:
+                    try:
+                        wait = max(wait, float(ra))
+                    except ValueError:
+                        pass
+                if attempt >= max_retries - 1:
+                    logger.warning(
+                        "RSS 429 rate limited (no more retries): %s — set RSS_USER_AGENT, "
+                        "increase RSS_DELAY_BETWEEN_FEEDS_SEC, or reduce SUBREDDIT_LIST size",
+                        url,
+                    )
+                    return None
+                logger.warning(
+                    "RSS 429 for %s, sleeping %.1fs then retry %s/%s",
+                    url,
+                    wait,
+                    attempt + 2,
+                    max_retries,
+                )
+                time.sleep(wait)
+                continue
+            if 500 <= resp.status_code < 600:
+                if attempt >= max_retries - 1:
+                    resp.raise_for_status()
+                wait = base * (2**attempt)
+                logger.warning("RSS %s for %s, sleeping %.1fs", resp.status_code, url, wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as e:
+            last_exc = e
+            if attempt >= max_retries - 1:
+                break
+            wait = base * (2**attempt)
+            logger.warning("RSS request error for %s: %s; retry in %.1fs", url, e, wait)
+            time.sleep(wait)
+    if last_exc:
+        logger.warning("Failed to fetch RSS %s after retries: %s", url, last_exc)
+    return None
+
+
 def fetch_posts_from_single_feed(feed_url: str, max_entries: int) -> list[dict]:
     """
     Fetch up to max_entries from one RSS URL. Returns a small list (no cross-feed accumulation).
@@ -62,9 +123,10 @@ def fetch_posts_from_single_feed(feed_url: str, max_entries: int) -> list[dict]:
     """
     rows: list[dict] = []
     cap = max(1, max_entries)
+    resp = _http_get_feed(feed_url)
+    if resp is None:
+        return rows
     try:
-        resp = requests.get(feed_url, timeout=30, headers={"User-Agent": USER_AGENT})
-        resp.raise_for_status()
         doc = feedparser.parse(resp.content)
         subreddit = _subreddit_from_feed_url(feed_url)
         for entry in doc.entries:
@@ -77,7 +139,7 @@ def fetch_posts_from_single_feed(feed_url: str, max_entries: int) -> list[dict]:
             except Exception as e:
                 logger.debug("Skip entry %s: %s", getattr(entry, "link", ""), e)
     except Exception as e:
-        logger.warning("Failed to fetch RSS %s: %s", feed_url, e)
+        logger.warning("Failed to parse RSS %s: %s", feed_url, e)
     return rows
 
 
@@ -86,14 +148,17 @@ def fetch_posts_from_rss() -> list[dict]:
     Fetch from all configured feeds into one list (tests / diagnostics only).
     Production uses jobs.run_collection per-feed fetch + insert to avoid one giant in-memory list.
     """
-    from utils.config import get_rss_feeds, RSS_MAX_POSTS_PER_RUN
+    from utils.config import RSS_DELAY_BETWEEN_FEEDS_SEC, get_rss_feeds, RSS_MAX_POSTS_PER_RUN
 
     feeds = get_rss_feeds()
     out: list[dict] = []
     remaining = max(1, RSS_MAX_POSTS_PER_RUN)
-    for url in feeds:
+    delay = max(0.0, RSS_DELAY_BETWEEN_FEEDS_SEC)
+    for i, url in enumerate(feeds):
         if remaining <= 0:
             break
+        if i > 0 and delay > 0:
+            time.sleep(delay)
         batch = fetch_posts_from_single_feed(url, max_entries=remaining)
         out.extend(batch)
         remaining -= len(batch)

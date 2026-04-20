@@ -5,7 +5,13 @@ Used by main.py on a schedule. Can also be run standalone (loops every FETCH_INT
 import logging
 import time
 
-from utils.config import USE_RSS, FETCH_INTERVAL_MINUTES, RSS_MAX_POSTS_PER_RUN, get_rss_feeds
+from utils.config import (
+    USE_RSS,
+    FETCH_INTERVAL_MINUTES,
+    RSS_DELAY_BETWEEN_FEEDS_SEC,
+    RSS_MAX_POSTS_PER_RUN,
+    get_rss_feeds,
+)
 from data.db import insert_posts
 
 logging.basicConfig(
@@ -26,10 +32,13 @@ def _run_rss_once_chunked() -> int:
     total_inserted = 0
     remaining = max(1, RSS_MAX_POSTS_PER_RUN)
     feeds = get_rss_feeds()
-    for url in feeds:
+    delay = max(0.0, RSS_DELAY_BETWEEN_FEEDS_SEC)
+    for i, url in enumerate(feeds):
         if remaining <= 0:
             logger.info("RSS: global cap %s reached; skipping further feeds", RSS_MAX_POSTS_PER_RUN)
             break
+        if i > 0 and delay > 0:
+            time.sleep(delay)
         rows = fetch_posts_from_single_feed(url, max_entries=remaining)
         if rows:
             n_new = insert_posts(rows)
