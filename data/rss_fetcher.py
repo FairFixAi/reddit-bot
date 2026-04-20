@@ -1,0 +1,101 @@
+"""Fetch public posts from Reddit RSS feeds (no API credentials required)."""
+import logging
+import re
+import time
+from datetime import datetime, timezone
+
+import feedparser
+import requests
+
+from utils.config import RSS_MAX_SELFTEXT_CHARS
+
+logger = logging.getLogger(__name__)
+
+SOURCE = "reddit_rss"
+USER_AGENT = "RedditRSSBot/1.0 (ingestion pipeline)"
+
+
+def _subreddit_from_feed_url(url: str) -> str:
+    """Extract subreddit name from feed URL, e.g. .../r/MechanicAdvice/new.rss -> mechanicadvice."""
+    m = re.search(r"/r/([^/]+)/", url, re.I)
+    return m.group(1).lower() if m else "unknown"
+
+
+def _parse_date(entry) -> datetime | None:
+    """Parse entry published/updated into timezone-aware datetime (feedparser uses UTC)."""
+    for key in ("published_parsed", "updated_parsed"):
+        t = getattr(entry, key, None)
+        if t and isinstance(t, time.struct_time) and len(t) >= 6:
+            return datetime(t[0], t[1], t[2], t[3], t[4], t[5], tzinfo=timezone.utc)
+    return None
+
+
+def _entry_to_row(entry, subreddit: str) -> dict:
+    link = getattr(entry, "link", "") or ""
+    title = getattr(entry, "title", "") or ""
+    selftext = ""
+    cap = max(1000, RSS_MAX_SELFTEXT_CHARS)
+    if getattr(entry, "content", None):
+        selftext = (entry.content[0].get("value") or "")[:cap]
+    if not selftext and getattr(entry, "description", None):
+        selftext = (entry.description or "")[:cap]
+    author = getattr(entry, "author", "") or ""
+    if not author and hasattr(entry, "dc_creator"):
+        author = entry.dc_creator or ""
+    published = _parse_date(entry) or datetime.now(timezone.utc)
+    return {
+        "source": SOURCE,
+        "external_id": link or getattr(entry, "id", ""),
+        "subreddit": subreddit,
+        "title": title,
+        "selftext": selftext,
+        "author": author,
+        "post_url": link,
+        "created_utc": published,
+    }
+
+
+def fetch_posts_from_single_feed(feed_url: str, max_entries: int) -> list[dict]:
+    """
+    Fetch up to max_entries from one RSS URL. Returns a small list (no cross-feed accumulation).
+    HTTP body and parsed feed are released when this returns.
+    """
+    rows: list[dict] = []
+    cap = max(1, max_entries)
+    try:
+        resp = requests.get(feed_url, timeout=30, headers={"User-Agent": USER_AGENT})
+        resp.raise_for_status()
+        doc = feedparser.parse(resp.content)
+        subreddit = _subreddit_from_feed_url(feed_url)
+        for entry in doc.entries:
+            if len(rows) >= cap:
+                break
+            try:
+                row = _entry_to_row(entry, subreddit)
+                if row["external_id"]:
+                    rows.append(row)
+            except Exception as e:
+                logger.debug("Skip entry %s: %s", getattr(entry, "link", ""), e)
+    except Exception as e:
+        logger.warning("Failed to fetch RSS %s: %s", feed_url, e)
+    return rows
+
+
+def fetch_posts_from_rss() -> list[dict]:
+    """
+    Fetch from all configured feeds into one list (tests / diagnostics only).
+    Production uses jobs.run_collection per-feed fetch + insert to avoid one giant in-memory list.
+    """
+    from utils.config import get_rss_feeds, RSS_MAX_POSTS_PER_RUN
+
+    feeds = get_rss_feeds()
+    out: list[dict] = []
+    remaining = max(1, RSS_MAX_POSTS_PER_RUN)
+    for url in feeds:
+        if remaining <= 0:
+            break
+        batch = fetch_posts_from_single_feed(url, max_entries=remaining)
+        out.extend(batch)
+        remaining -= len(batch)
+    logger.info("RSS: fetched %d posts from %d feeds (cap=%s)", len(out), len(feeds), RSS_MAX_POSTS_PER_RUN)
+    return out
