@@ -43,6 +43,8 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 **RSS collection (Render / OOM):** Production collection **does not** accumulate all feeds into one list. It **fetches one feed → inserts to Supabase → releases**, then the next feed, until `RSS_MAX_POSTS_PER_RUN` budget is used. `insert_posts` also **chunks** writes (`INSERT_POSTS_CHUNK_SIZE`, default 25) with a **commit per chunk**. `RSS_MAX_SELFTEXT_CHARS` defaults to **50000** per stored body. Tune `RSS_MAX_POSTS_PER_RUN`, `INSERT_POSTS_CHUNK_SIZE`, and `CLASSIFICATION_BATCH_SIZE` (default **25**) on 512 MB workers.
 
+**RSS HTTP 429 on Render:** Reddit rate-limits repeated requests from cloud IPs. This repo **sleeps `RSS_DELAY_BETWEEN_FEEDS_SEC` (default 3.5s)** between feeds, **retries 429** with backoff and `Retry-After`, and sends **`RSS_USER_AGENT`** (falls back to `REDDIT_USER_AGENT`). On Render, set a **unique** `RSS_USER_AGENT` (see [Reddit API wiki](https://github.com/reddit-archive/reddit/wiki/api)); if 429 persists, raise `RSS_DELAY_BETWEEN_FEEDS_SEC` (e.g. `6`) or shorten `SUBREDDIT_LIST` / use the official Reddit API (`USE_RSS=false`) with OAuth.
+
 **Weekly report:** Leave `WEEKLY_REPORT_INCLUDE_FULL_POSTS` unset or `false` on Render so the job does not load full raw windows into memory.
 
 ## Running jobs manually
@@ -68,6 +70,8 @@ From the `reddit-bot` directory:
 ## Database
 
 **New Supabase project:** run `data/schema.sql` once in **SQL Editor** (creates `posts` and `post_classifications` with indexes). Alternatively, call `data.db.init_schema()` from a one-off script with `DATABASE_URL` set.
+
+**VPS / Linux: `Network is unreachable` to Supabase (often IPv6):** The direct host `db.<project>.supabase.co` may resolve to IPv6; many VPSes have no IPv6 route. In Supabase **Dashboard → Connect → Session pooler**, copy the **IPv4-friendly** URI (host like `aws-0-<region>.pooler.supabase.com`, user `postgres.<project-ref>`, port **5432**). Set that as `DATABASE_URL`. Details: `REDDIT_APP_SETUP.md` (same issue as Render).
 
 - **`posts`** – Raw posts (`source`, `external_id`, `subreddit`, `title`, `selftext`, `author`, `post_url`, `created_utc`). Unique on `(source, external_id)`.
 - **`post_classifications`** – One row per post (`topic`, `sentiment`, `emotional_intensity`, `financial_mention`, `financial_amount`, `problem_category`, `intent`, `vehicle_make`, `vehicle_model`, `keywords`, `summary`, `suggested_action`, `classified_at`). Unique on `post_id`; `classified_at` defaults to `NOW()` and is updated on each upsert for weekly windows and trends.
