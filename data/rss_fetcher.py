@@ -7,12 +7,7 @@ from datetime import datetime, timezone
 import feedparser
 import requests
 
-from utils.config import (
-    RSS_MAX_RETRIES,
-    RSS_MAX_SELFTEXT_CHARS,
-    RSS_RETRY_BASE_SLEEP_SEC,
-    RSS_USER_AGENT,
-)
+from utils.config import RSS_HTTP_MAX_RETRIES, RSS_HTTP_RETRY_BASE_SEC, RSS_USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +30,14 @@ def _parse_date(entry) -> datetime | None:
 
 
 def _entry_to_row(entry, subreddit: str) -> dict:
+    """Map RSS entry to row. Full body text as returned by the feed — no truncation at storage."""
     link = getattr(entry, "link", "") or ""
     title = getattr(entry, "title", "") or ""
     selftext = ""
-    cap = max(1000, RSS_MAX_SELFTEXT_CHARS)
     if getattr(entry, "content", None):
-        selftext = (entry.content[0].get("value") or "")[:cap]
+        selftext = entry.content[0].get("value") or ""
     if not selftext and getattr(entry, "description", None):
-        selftext = (entry.description or "")[:cap]
+        selftext = entry.description or ""
     author = getattr(entry, "author", "") or ""
     if not author and hasattr(entry, "dc_creator"):
         author = entry.dc_creator or ""
@@ -65,8 +60,8 @@ def _http_get_feed(url: str) -> requests.Response | None:
     honors Retry-After and exponential backoff.
     """
     headers = {"User-Agent": RSS_USER_AGENT}
-    max_retries = max(1, RSS_MAX_RETRIES)
-    base = max(1.0, RSS_RETRY_BASE_SLEEP_SEC)
+    max_retries = RSS_HTTP_MAX_RETRIES
+    base = RSS_HTTP_RETRY_BASE_SEC
     last_exc: Exception | None = None
     for attempt in range(max_retries):
         try:
@@ -81,8 +76,7 @@ def _http_get_feed(url: str) -> requests.Response | None:
                         pass
                 if attempt >= max_retries - 1:
                     logger.warning(
-                        "RSS 429 rate limited (no more retries): %s — set RSS_USER_AGENT, "
-                        "increase RSS_DELAY_BETWEEN_FEEDS_SEC, or reduce SUBREDDIT_LIST size",
+                        "RSS 429 rate limited (no more retries): %s — set a unique RSS_USER_AGENT or reduce feeds",
                         url,
                     )
                     return None

@@ -1,110 +1,122 @@
-"""Load configuration from environment variables."""
+"""Load configuration from environment variables.
+
+Every variable is required: missing or empty values raise ValueError at import time.
+Use RSS_FEED_URLS=DERIVE_FROM_SUBREDDIT_LIST to build feed URLs from SUBREDDIT_LIST.
+When USE_RSS=true, set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET to the literal ``unused`` (Reddit Data API disabled).
+"""
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from reddit-bot project root (parent of utils)
 _env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_env_path)
+load_dotenv()
 
 
-def get_env(key: str, default: str | None = None) -> str:
-    value = os.environ.get(key, default)
-    if value is None or value == "":
+def get_env(key: str) -> str:
+    value = os.environ.get(key)
+    if value is None or str(value).strip() == "":
         raise ValueError(f"Missing required environment variable: {key}")
-    return value
+    return str(value).strip()
 
 
-def get_env_optional(key: str, default: str | None = None) -> str | None:
-    value = os.environ.get(key, default)
-    return value if value else default
+def get_env_bool(key: str) -> bool:
+    v = get_env(key).lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    raise ValueError(f"{key} must be true or false (got {v!r})")
 
 
-# Use RSS (no Reddit API credentials). When True, REDDIT_* are optional.
-USE_RSS = get_env_optional("USE_RSS", "true").lower() in ("1", "true", "yes")
+def get_env_int(key: str, *, minimum: int | None = 1) -> int:
+    raw = get_env(key)
+    try:
+        n = int(raw, 10)
+    except ValueError as e:
+        raise ValueError(f"{key} must be an integer (got {raw!r})") from e
+    if minimum is not None and n < minimum:
+        raise ValueError(f"{key} must be >= {minimum} (got {n})")
+    return n
 
-# Database (required)
+
+def get_env_float(key: str, *, minimum: float | None = 0.0) -> float:
+    raw = get_env(key)
+    try:
+        x = float(raw)
+    except ValueError as e:
+        raise ValueError(f"{key} must be a number (got {raw!r})") from e
+    if minimum is not None and x < minimum:
+        raise ValueError(f"{key} must be >= {minimum} (got {x})")
+    return x
+
+
+RSS_FEED_URLS_DERIVE = "DERIVE_FROM_SUBREDDIT_LIST"
+REDDIT_API_DISABLED_MARKER = "unused"
+
+
+USE_RSS = get_env_bool("USE_RSS")
 DATABASE_URL = get_env("DATABASE_URL")
 
-# RSS feeds (used when USE_RSS=true): comma-separated URLs
-RSS_FEED_URLS_RAW = get_env_optional("RSS_FEED_URLS") or ""
-RSS_FEED_URLS = [u.strip() for u in RSS_FEED_URLS_RAW.split(",") if u.strip()]
+SUBREDDIT_LIST_STR = get_env("SUBREDDIT_LIST")
+SUBREDDIT_LIST = [s.strip() for s in SUBREDDIT_LIST_STR.split(",") if s.strip()]
+if not SUBREDDIT_LIST:
+    raise ValueError("SUBREDDIT_LIST must list at least one subreddit (comma-separated)")
 
-# If no RSS_FEED_URLS, build from subreddit list (same as before)
-SUBREDDIT_LIST = [s.strip() for s in (get_env_optional("SUBREDDIT_LIST") or "").split(",") if s.strip()]
+_RSS_FEED_URLS_RAW = get_env("RSS_FEED_URLS")
 
-# Default RSS feeds when none provided (client examples)
-DEFAULT_RSS_FEEDS = [
-    "https://www.reddit.com/r/MechanicAdvice/new.rss",
-    "https://www.reddit.com/r/Cartalk/new.rss",
-    "https://www.reddit.com/r/AskMechanics/new.rss",
-    "https://www.reddit.com/r/AutoRepair/new.rss",
-    "https://www.reddit.com/r/UsedCars/new.rss",
-]
 
 def get_rss_feeds() -> list[str]:
-    if RSS_FEED_URLS:
-        return RSS_FEED_URLS
-    if SUBREDDIT_LIST:
+    if _RSS_FEED_URLS_RAW == RSS_FEED_URLS_DERIVE:
         return [f"https://www.reddit.com/r/{s}/new.rss" for s in SUBREDDIT_LIST]
-    return DEFAULT_RSS_FEEDS
+    urls = [u.strip() for u in _RSS_FEED_URLS_RAW.split(",") if u.strip()]
+    if not urls:
+        raise ValueError(
+            f"RSS_FEED_URLS must be {RSS_FEED_URLS_DERIVE!r} or a comma-separated list of URLs"
+        )
+    return urls
 
-# Fetch interval in minutes (collection runs every N minutes)
-FETCH_INTERVAL_MINUTES = int(get_env_optional("FETCH_INTERVAL_MINUTES") or "5")
-# Classification runs every N minutes (main.py)
-CLASSIFICATION_INTERVAL_MINUTES = int(get_env_optional("CLASSIFICATION_INTERVAL_MINUTES") or "60")
-# Max posts to classify per run (avoids loading unbounded rows / long OpenAI runs; ~25 safer on 512MB Render)
-CLASSIFICATION_BATCH_SIZE = int(get_env_optional("CLASSIFICATION_BATCH_SIZE") or "25")
 
-# Weekly report: attach full post list to JSON (large memory); default off for Render stability
-WEEKLY_REPORT_INCLUDE_FULL_POSTS = get_env_optional("WEEKLY_REPORT_INCLUDE_FULL_POSTS", "false").lower() in (
-    "1",
-    "true",
-    "yes",
-)
+def get_subreddit_names_for_ingestion() -> list[str]:
+    return SUBREDDIT_LIST
 
-# Reddit API (optional when USE_RSS=true)
-REDDIT_CLIENT_ID = get_env_optional("REDDIT_CLIENT_ID")
-REDDIT_CLIENT_SECRET = get_env_optional("REDDIT_CLIENT_SECRET")
-REDDIT_USER_AGENT = get_env_optional("REDDIT_USER_AGENT")
 
-# Optional
-POSTS_PER_RUN = int(get_env_optional("POSTS_PER_RUN") or "100")
+FETCH_INTERVAL_MINUTES = get_env_int("FETCH_INTERVAL_MINUTES")
+CLASSIFICATION_INTERVAL_MINUTES = get_env_int("CLASSIFICATION_INTERVAL_MINUTES")
+RETENTION_DAYS = get_env_int("RETENTION_DAYS")
+RETENTION_RUN_INTERVAL_HOURS = get_env_int("RETENTION_RUN_INTERVAL_HOURS")
+POSTS_PER_RUN = get_env_int("POSTS_PER_RUN")
+PIPELINE_MAX_BATCH = get_env_int("PIPELINE_MAX_BATCH")
+RSS_MAX_POSTS_PER_RUN = get_env_int("RSS_MAX_POSTS_PER_RUN")
+RSS_DELAY_BETWEEN_FEEDS_SEC = get_env_float("RSS_DELAY_BETWEEN_FEEDS_SEC", minimum=0.0)
+CLASSIFICATION_BATCH_SIZE = get_env_int("CLASSIFICATION_BATCH_SIZE")
+RSS_HTTP_MAX_RETRIES = get_env_int("RSS_HTTP_MAX_RETRIES")
+RSS_HTTP_RETRY_BASE_SEC = get_env_float("RSS_HTTP_RETRY_BASE_SEC", minimum=0.01)
 
-# RSS collection (USE_RSS=true): cap rows per cycle and max body chars per entry (memory on Render)
-RSS_MAX_POSTS_PER_RUN = int(get_env_optional("RSS_MAX_POSTS_PER_RUN") or str(POSTS_PER_RUN))
-RSS_MAX_SELFTEXT_CHARS = int(get_env_optional("RSS_MAX_SELFTEXT_CHARS") or "50000")
+REDDIT_CLIENT_ID = get_env("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = get_env("REDDIT_CLIENT_SECRET")
+REDDIT_USER_AGENT = get_env("REDDIT_USER_AGENT")
+RSS_USER_AGENT = get_env("RSS_USER_AGENT")
 
-# Reddit rate-limits cloud IPs; space requests and set a descriptive User-Agent (see README).
-RSS_DELAY_BETWEEN_FEEDS_SEC = float(get_env_optional("RSS_DELAY_BETWEEN_FEEDS_SEC") or "3.5")
-RSS_MAX_RETRIES = int(get_env_optional("RSS_MAX_RETRIES") or "4")
-RSS_RETRY_BASE_SLEEP_SEC = float(get_env_optional("RSS_RETRY_BASE_SLEEP_SEC") or "8")
-# Prefer unique string on production, e.g. "myapp/1.0 (by u/yourname; contact@domain.com)"
-RSS_USER_AGENT = (
-    get_env_optional("RSS_USER_AGENT")
-    or get_env_optional("REDDIT_USER_AGENT")
-    or "reddit-bot/1.0 (RSS ingestion; set RSS_USER_AGENT in env)"
-)
+OPENAI_API_KEY = get_env("OPENAI_API_KEY")
+REPORT_EMAIL_TO = get_env("REPORT_EMAIL_TO")
 
-# DB insert: commit each chunk (smaller peak RAM than one giant execute_values)
-INSERT_POSTS_CHUNK_SIZE = int(get_env_optional("INSERT_POSTS_CHUNK_SIZE") or "25")
+SMTP_HOST = get_env("SMTP_HOST")
+SMTP_PORT = get_env_int("SMTP_PORT", minimum=1)
+SMTP_USER = get_env("SMTP_USER")
+SMTP_PASSWORD = get_env("SMTP_PASSWORD")
 
-# Classification: optional max selftext length sent to the model (unset = no truncation)
-_cm = get_env_optional("CLASSIFICATION_MAX_SELFTEXT_CHARS", "")
-CLASSIFICATION_MAX_SELFTEXT_CHARS = int(_cm) if _cm.strip() else None
+WEEKLY_REPORT_DAYS = get_env_int("WEEKLY_REPORT_DAYS")
+WEEKLY_REPORT_URGENT_SAMPLE_LIMIT = get_env_int("WEEKLY_REPORT_URGENT_SAMPLE_LIMIT")
+WEEKLY_REPORT_FINANCIAL_SAMPLE_LIMIT = get_env_int("WEEKLY_REPORT_FINANCIAL_SAMPLE_LIMIT")
+WEEKLY_REPORT_PROBLEM_VEHICLE_SQL_LIMIT = get_env_int("WEEKLY_REPORT_PROBLEM_VEHICLE_SQL_LIMIT")
 
-# Milestone 2: OpenAI classification
-OPENAI_API_KEY = get_env_optional("OPENAI_API_KEY")
 
-# Milestone 2: Weekly report email recipient (all reports go here)
-REPORT_EMAIL_TO = get_env_optional("REPORT_EMAIL_TO") or "alan@modernenginepros.com"
+def clamp_batch_size(n: int) -> int:
+    return max(1, min(PIPELINE_MAX_BATCH, n))
 
-# Milestone 2: 90-day rolling retention
-RETENTION_DAYS = int(get_env_optional("RETENTION_DAYS") or "90")
 
-# Milestone 2: SMTP for weekly report
-SMTP_HOST = get_env_optional("SMTP_HOST") or "smtp.gmail.com"
-SMTP_PORT = int(get_env_optional("SMTP_PORT") or "587")
-SMTP_USER = get_env_optional("SMTP_USER")
-SMTP_PASSWORD = get_env_optional("SMTP_PASSWORD")
+def reddit_api_credentials_active() -> bool:
+    """False when Reddit Data API is intentionally disabled (RSS-only)."""
+    m = REDDIT_API_DISABLED_MARKER.lower()
+    return REDDIT_CLIENT_ID.lower() != m and REDDIT_CLIENT_SECRET.lower() != m

@@ -567,6 +567,6 @@
   "notes": {
     "trend_basis": "Cluster trends compare counts of classifications by problem_category where classified_at fell in this week vs the prior week (7-day windows).",
     "top_10_basis": "Top 10 ranked by internal opportunity score (urgency, buying intent, emotion, financial mention).",
-    "data_scope": "Summary and capped samples only (no full post list). Set WEEKLY_REPORT_INCLUDE_FULL_POSTS=true to attach legacy full posts[] including selftext."
+    "data_scope": "Summary and capped samples only (no full post list; full selftext is not attached in the weekly export)."
   }
 }

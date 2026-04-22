@@ -12,10 +12,7 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and fill in at least:
-   - `DATABASE_URL` (Supabase/PostgreSQL)
-   - `SUBREDDIT_LIST` or `RSS_FEED_URLS` (or use defaults)
-   - For M2: `OPENAI_API_KEY`, `REPORT_EMAIL_TO`, `SMTP_USER`, `SMTP_PASSWORD`
+1. Copy `.env.example` to `.env` and fill **every** key (empty values are rejected at import). Schedules, batch sizes, RSS retry policy, retention cadence, and weekly-report limits are all env-driven — see `.env.example` and `utils/config.py`.
 
 2. Create a virtualenv and install dependencies:
 
@@ -31,21 +28,15 @@ Reddit ingestion, storage, AI classification, and weekly report.
    python main.py
    ```
 
-   This runs indefinitely and, on schedule:
-   - **Collection** every `FETCH_INTERVAL_MINUTES` (default 5)
-   - **Classification** every `CLASSIFICATION_INTERVAL_MINUTES` (default 60)
-   - **Retention** once per day (deletes posts older than `RETENTION_DAYS`)
-   - **Weekly report** once per week (email + JSON to `REPORT_EMAIL_TO`)
+   This runs indefinitely on schedule from env (`FETCH_INTERVAL_MINUTES`, `CLASSIFICATION_INTERVAL_MINUTES`, `RETENTION_RUN_INTERVAL_HOURS`, `RETENTION_DAYS`, etc.).
 
-**Weekly report (memory-safe):** The job builds counts and breakdowns in the database and only loads capped samples (no full-window `selftext` load). The JSON attachment is a compact summary. A full export of every raw post for the window is **not** included by default (keeps small Render workers stable). To attach the legacy full `posts` array, set `WEEKLY_REPORT_INCLUDE_FULL_POSTS=true` (not recommended for large datasets).
+**Weekly report (memory-safe):** Counts and breakdowns from SQL; compact JSON attachment. Window and sample caps use `WEEKLY_REPORT_*` env vars.
 
-**Classification:** Each run classifies at most `CLASSIFICATION_BATCH_SIZE` posts (default 25) so the worker does not pull an unbounded unclassified list into memory or call OpenAI for thousands of rows in one tick. Optional: `CLASSIFICATION_MAX_SELFTEXT_CHARS` truncates body text sent to the model only (full text remains in the DB if already stored).
+**Classification:** Batch size is `CLASSIFICATION_BATCH_SIZE`. Full `posts.selftext` is sent to the classifier (see `jobs/classifier.py` for model limits).
 
-**RSS collection (Render / OOM):** Production collection **does not** accumulate all feeds into one list. It **fetches one feed → inserts to Supabase → releases**, then the next feed, until `RSS_MAX_POSTS_PER_RUN` budget is used. `insert_posts` also **chunks** writes (`INSERT_POSTS_CHUNK_SIZE`, default 25) with a **commit per chunk**. `RSS_MAX_SELFTEXT_CHARS` defaults to **50000** per stored body. Tune `RSS_MAX_POSTS_PER_RUN`, `INSERT_POSTS_CHUNK_SIZE`, and `CLASSIFICATION_BATCH_SIZE` (default **25**) on 512 MB workers.
+**RSS collection (streaming):** One feed at a time → insert in chunks of `PIPELINE_MAX_BATCH` → next feed. Pauses and HTTP retries come from `RSS_DELAY_BETWEEN_FEEDS_SEC`, `RSS_HTTP_MAX_RETRIES`, and `RSS_HTTP_RETRY_BASE_SEC`. **Post body** is stored as returned by the feed (no truncation at insert).
 
-**RSS HTTP 429 on Render:** Reddit rate-limits repeated requests from cloud IPs. This repo **sleeps `RSS_DELAY_BETWEEN_FEEDS_SEC` (default 3.5s)** between feeds, **retries 429** with backoff and `Retry-After`, and sends **`RSS_USER_AGENT`** (falls back to `REDDIT_USER_AGENT`). On Render, set a **unique** `RSS_USER_AGENT` (see [Reddit API wiki](https://github.com/reddit-archive/reddit/wiki/api)); if 429 persists, raise `RSS_DELAY_BETWEEN_FEEDS_SEC` (e.g. `6`) or shorten `SUBREDDIT_LIST` / use the official Reddit API (`USE_RSS=false`) with OAuth.
-
-**Weekly report:** Leave `WEEKLY_REPORT_INCLUDE_FULL_POSTS` unset or `false` on Render so the job does not load full raw windows into memory.
+**RSS HTTP 429 on Render:** Set a **unique** `RSS_USER_AGENT` in `.env` ([Reddit API wiki](https://github.com/reddit-archive/reddit/wiki/api)). If 429 persists, shorten `SUBREDDIT_LIST` or use explicit `RSS_FEED_URLS`, or switch to **`USE_RSS=false`** with real Reddit OAuth credentials (replace `unused` placeholders for `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`).
 
 ## Running jobs manually
 
@@ -55,8 +46,8 @@ From the `reddit-bot` directory:
 |--------|---------|
 | `python -m jobs.run_collection` | One collection cycle (then exits; or loops if run as script) |
 | `python -m jobs.run_classification` | Classify unclassified posts (batch) |
-| `python -m jobs.run_retention` | Delete posts older than `RETENTION_DAYS` |
-| `python -m jobs.weekly_report` | Build 7-day summary and email to `REPORT_EMAIL_TO` |
+| `python -m jobs.run_retention` | Delete posts older than `RETENTION_DAYS` (from `.env`) |
+| `python -m jobs.weekly_report` | Build summary for `WEEKLY_REPORT_DAYS` and email to `REPORT_EMAIL_TO` |
 
 ## Test scripts (scripts/)
 

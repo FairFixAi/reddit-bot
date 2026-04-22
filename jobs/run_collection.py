@@ -8,9 +8,11 @@ import time
 from utils.config import (
     USE_RSS,
     FETCH_INTERVAL_MINUTES,
+    PIPELINE_MAX_BATCH,
     RSS_DELAY_BETWEEN_FEEDS_SEC,
     RSS_MAX_POSTS_PER_RUN,
     get_rss_feeds,
+    get_subreddit_names_for_ingestion,
 )
 from data.db import insert_posts
 
@@ -41,7 +43,10 @@ def _run_rss_once_chunked() -> int:
             time.sleep(delay)
         rows = fetch_posts_from_single_feed(url, max_entries=remaining)
         if rows:
-            n_new = insert_posts(rows)
+            n_new = 0
+            for j in range(0, len(rows), PIPELINE_MAX_BATCH):
+                chunk = rows[j : j + PIPELINE_MAX_BATCH]
+                n_new += insert_posts(chunk)
             total_inserted += n_new
             remaining -= len(rows)
             logger.info(
@@ -57,10 +62,18 @@ def run_once() -> int:
     """One fetch cycle. Returns number of new posts inserted."""
     if USE_RSS:
         return _run_rss_once_chunked()
-    from data.reddit_client import fetch_posts
+    from data.reddit_client import fetch_posts_from_subreddit
 
-    rows = fetch_posts()
-    return insert_posts(rows)
+    total_inserted = 0
+    subs = get_subreddit_names_for_ingestion()
+    for sub in subs:
+        batch = fetch_posts_from_subreddit(sub, PIPELINE_MAX_BATCH)
+        if not batch:
+            continue
+        for j in range(0, len(batch), PIPELINE_MAX_BATCH):
+            chunk = batch[j : j + PIPELINE_MAX_BATCH]
+            total_inserted += insert_posts(chunk)
+    return total_inserted
 
 
 def main() -> None:

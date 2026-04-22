@@ -9,8 +9,11 @@ from utils.config import (
     REDDIT_CLIENT_ID,
     REDDIT_CLIENT_SECRET,
     REDDIT_USER_AGENT,
-    SUBREDDIT_LIST,
     POSTS_PER_RUN,
+    PIPELINE_MAX_BATCH,
+    clamp_batch_size,
+    get_subreddit_names_for_ingestion,
+    reddit_api_credentials_active,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,27 +42,44 @@ def _submission_to_row(submission: Submission) -> dict:
     }
 
 
+def fetch_posts_from_subreddit(subreddit_name: str, limit: int) -> list[dict]:
+    """
+    Fetch up to `limit` recent posts (capped at PIPELINE_MAX_BATCH) from one subreddit.
+    Used for streaming collection: one batch per subreddit, then insert, then release.
+    """
+    if not reddit_api_credentials_active():
+        return []
+    limit = clamp_batch_size(limit)
+    rows: list[dict] = []
+    try:
+        reddit = _reddit_client()
+        sub = reddit.subreddit(subreddit_name)
+        for submission in sub.new(limit=limit):
+            if not submission.stickied:
+                rows.append(_submission_to_row(submission))
+    except Exception as e:
+        logger.warning("Failed to fetch from r/%s: %s", subreddit_name, e)
+    return rows
+
+
 def fetch_posts() -> list[dict]:
     """
-    Fetch recent public posts from configured subreddits (requires REDDIT_* env vars).
-    Returns list of row dicts in unified shape for insert_posts.
+    Fetch recent public posts from all configured subreddits (requires REDDIT_* env vars).
+    Returns list of row dicts; each subreddit contributes at most per_sub_limit (<= PIPELINE_MAX_BATCH).
     """
-    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET or not REDDIT_USER_AGENT:
-        logger.warning("Reddit API credentials not set; use RSS (USE_RSS=true) or set REDDIT_* env vars.")
+    if not reddit_api_credentials_active():
+        logger.warning(
+            "Reddit API disabled (REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET are ``unused``); "
+            "use RSS or set real Reddit OAuth credentials."
+        )
         return []
-    if not SUBREDDIT_LIST:
-        logger.warning("SUBREDDIT_LIST is empty")
+    subs = get_subreddit_names_for_ingestion()
+    if not subs:
+        logger.warning("No subreddits configured for Reddit API ingestion")
         return []
-    reddit = _reddit_client()
-    limit_per_sub = max(10, POSTS_PER_RUN // max(1, len(SUBREDDIT_LIST)))
+    per_sub = max(1, min(PIPELINE_MAX_BATCH, POSTS_PER_RUN // max(1, len(subs))))
     rows: list[dict] = []
-    for sub_name in SUBREDDIT_LIST:
-        try:
-            sub = reddit.subreddit(sub_name)
-            for submission in sub.new(limit=limit_per_sub):
-                if not submission.stickied:
-                    rows.append(_submission_to_row(submission))
-        except Exception as e:
-            logger.warning("Failed to fetch from r/%s: %s", sub_name, e)
-    logger.info("Reddit API: fetched %d posts from %d subreddits", len(rows), len(SUBREDDIT_LIST))
+    for sub_name in subs:
+        rows.extend(fetch_posts_from_subreddit(sub_name, per_sub))
+    logger.info("Reddit API: fetched %d posts from %d subreddits", len(rows), len(subs))
     return rows

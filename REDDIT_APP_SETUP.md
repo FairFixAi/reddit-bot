@@ -182,7 +182,7 @@ Start command: python main.py
 
 3. Open Environment and add these variables. Use the exact key names and set your own values OR upload the .env from source code:
 
-REQUIRED (use your real values):
+Set **all** variables from `.env.example` (no empty values). Highlights:
 
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@YOUR_PROJECT_REF.supabase.co:5432/postgres
 (Prefer the **pooled** URI from Supabase if Render cannot connect — see troubleshooting below.)
@@ -194,17 +194,34 @@ SMTP_USER=your_sender_email@gmail.com
 SMTP_PASSWORD=your_gmail_app_password
 
 USE_RSS=true
+SUBREDDIT_LIST=MechanicAdvice,cars,Cartalk,AutoRepair,AskMechanics,UsedCars,lemonlaw,autobody,askcarsales,buyingacar
+RSS_FEED_URLS=DERIVE_FROM_SUBREDDIT_LIST
+(or comma-separated full RSS URLs instead of DERIVE_FROM_SUBREDDIT_LIST)
+
 FETCH_INTERVAL_MINUTES=5
 CLASSIFICATION_INTERVAL_MINUTES=60
 RETENTION_DAYS=90
-POSTS_PER_RUN=100
-SUBREDDIT_LIST=MechanicAdvice,cars,Cartalk,AutoRepair,AskMechanics,UsedCars
-(or leave SUBREDDIT_LIST and RSS_FEED_URLS empty to use built-in feeds)
+RETENTION_RUN_INTERVAL_HOURS=24
+POSTS_PER_RUN=50
+PIPELINE_MAX_BATCH=50
+RSS_MAX_POSTS_PER_RUN=50
+RSS_DELAY_BETWEEN_FEEDS_SEC=3.5
+CLASSIFICATION_BATCH_SIZE=50
+RSS_HTTP_MAX_RETRIES=4
+RSS_HTTP_RETRY_BASE_SEC=8
+RSS_USER_AGENT=YourApp/1.0 (unique string)
 
-Reddit API only when USE_RSS=false:
-REDDIT_CLIENT_ID=
-REDDIT_CLIENT_SECRET=
+WEEKLY_REPORT_DAYS=7
+WEEKLY_REPORT_URGENT_SAMPLE_LIMIT=50
+WEEKLY_REPORT_FINANCIAL_SAMPLE_LIMIT=50
+WEEKLY_REPORT_PROBLEM_VEHICLE_SQL_LIMIT=150
+
+When USE_RSS=true, set Reddit OAuth vars to placeholders (RSS does not use the API):
+REDDIT_CLIENT_ID=unused
+REDDIT_CLIENT_SECRET=unused
 REDDIT_USER_AGENT=RedditBot/1.0 (by your_reddit_username)
+
+When USE_RSS=false, set real REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT instead of unused.
 
 4. Deploy. The worker will run continuously: it collects and classifies on schedule, runs retention daily, and sends the weekly report only on Mondays to REPORT_EMAIL_TO.
 

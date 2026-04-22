@@ -3,8 +3,7 @@ Generate weekly JSON summary and send formatted email report to REPORT_EMAIL_TO.
 Uses same SMTP pattern as test_smtp.py. Sends both plain-text and HTML (template).
 
 Aggregates and capped slices are loaded via SQL (no full post bodies) so the job
-stays memory-safe on small hosts (e.g. Render). Optional full post export:
-WEEKLY_REPORT_INCLUDE_FULL_POSTS=true.
+stays memory-safe on small hosts (e.g. Render). Full post export in JSON is disabled.
 """
 import json
 import logging
@@ -24,13 +23,15 @@ from utils.config import (
     SMTP_PORT,
     SMTP_USER,
     SMTP_PASSWORD,
-    WEEKLY_REPORT_INCLUDE_FULL_POSTS,
+    WEEKLY_REPORT_DAYS,
+    WEEKLY_REPORT_FINANCIAL_SAMPLE_LIMIT,
+    WEEKLY_REPORT_PROBLEM_VEHICLE_SQL_LIMIT,
+    WEEKLY_REPORT_URGENT_SAMPLE_LIMIT,
 )
 from data.db import (
     count_classified_posts_in_report_window,
     count_financial_mention_in_report_window,
     count_urgent_high_emotional_in_report_window,
-    get_classified_posts_for_week,
     get_financial_mention_sample_report_window,
     get_problem_category_counts_by_classified_window,
     get_report_window_by_problem_and_vehicle,
@@ -48,11 +49,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
-REPORT_DAYS = 7
-URGENT_SAMPLE_LIMIT = 50
-FINANCIAL_SAMPLE_LIMIT = 50
-PROBLEM_VEHICLE_SQL_LIMIT = 150
 
 
 def _serialize_row(row: dict) -> dict:
@@ -96,8 +92,9 @@ def _opportunity_score(r: dict) -> float:
 def _cluster_trends() -> list[dict]:
     """Rising / stable / declining by problem cluster vs prior week (by classified_at)."""
     try:
-        current = get_problem_category_counts_by_classified_window(7, 0)
-        prior = get_problem_category_counts_by_classified_window(14, 7)
+        d = WEEKLY_REPORT_DAYS
+        current = get_problem_category_counts_by_classified_window(d, 0)
+        prior = get_problem_category_counts_by_classified_window(d * 2, d)
     except Exception as e:
         logger.warning("Cluster trends query failed (classified_at or DB): %s", e)
         return []
@@ -139,10 +136,10 @@ def _insights_from_db(days: int) -> dict:
     most_common_issues = sorted(by_cat.items(), key=lambda x: -x[1])[:5]
 
     urgent_sample = get_urgent_high_emotional_sample_report_window(
-        days, limit=URGENT_SAMPLE_LIMIT
+        days, limit=WEEKLY_REPORT_URGENT_SAMPLE_LIMIT
     )
     financial_sample = get_financial_mention_sample_report_window(
-        days, limit=FINANCIAL_SAMPLE_LIMIT
+        days, limit=WEEKLY_REPORT_FINANCIAL_SAMPLE_LIMIT
     )
     top_rows = get_top_opportunities_report_window(days, limit=10)
 
@@ -176,7 +173,7 @@ def _insights_from_db(days: int) -> dict:
             }
         )
 
-    by_pv = get_report_window_by_problem_and_vehicle(days, limit=PROBLEM_VEHICLE_SQL_LIMIT)
+    by_pv = get_report_window_by_problem_and_vehicle(days, limit=WEEKLY_REPORT_PROBLEM_VEHICLE_SQL_LIMIT)
 
     return {
         "urgent_high_emotional_sample": [_serialize_row(r) for r in urgent_sample],
@@ -199,21 +196,21 @@ def build_json_summary() -> dict:
     """Build weekly summary for JSON export (compact by default; no full post bodies)."""
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "period_days": REPORT_DAYS,
-        "total_posts": count_classified_posts_in_report_window(REPORT_DAYS),
-        "by_subreddit": get_report_window_counts_by_subreddit(REPORT_DAYS),
-        "by_problem_category": get_report_window_counts_by_problem_category(REPORT_DAYS),
-        "by_intent": get_report_window_counts_by_intent(REPORT_DAYS),
+        "period_days": WEEKLY_REPORT_DAYS,
+        "total_posts": count_classified_posts_in_report_window(WEEKLY_REPORT_DAYS),
+        "by_subreddit": get_report_window_counts_by_subreddit(WEEKLY_REPORT_DAYS),
+        "by_problem_category": get_report_window_counts_by_problem_category(WEEKLY_REPORT_DAYS),
+        "by_intent": get_report_window_counts_by_intent(WEEKLY_REPORT_DAYS),
     }
-    summary["insights"] = _insights_from_db(REPORT_DAYS)
+    summary["insights"] = _insights_from_db(WEEKLY_REPORT_DAYS)
     summary["notes"] = {
-        "trend_basis": "Cluster trends compare counts of classifications by problem_category where classified_at fell in this week vs the prior week (7-day windows).",
+        "trend_basis": (
+            f"Cluster trends compare counts of classifications by problem_category where classified_at "
+            f"fell in this week vs the prior week ({WEEKLY_REPORT_DAYS}-day windows)."
+        ),
         "top_10_basis": "Top 10 ranked by internal opportunity score (urgency, buying intent, emotion, financial mention).",
-        "data_scope": "Summary and capped samples only (no full post list). Set WEEKLY_REPORT_INCLUDE_FULL_POSTS=true to attach legacy full posts[] including selftext.",
+        "data_scope": "Summary and capped samples only (no full post list in JSON).",
     }
-    if WEEKLY_REPORT_INCLUDE_FULL_POSTS:
-        rows = get_classified_posts_for_week(days=REPORT_DAYS)
-        summary["posts"] = [_serialize_row(r) for r in rows]
     return summary
 
 
@@ -426,18 +423,17 @@ def send_report_email(body: str, json_str: str, to_email: str, html_body: str = 
 
 
 def main() -> None:
-    logger.info("Building weekly summary (last %s days)...", REPORT_DAYS)
+    logger.info("Building weekly summary (last %s days)...", WEEKLY_REPORT_DAYS)
     t0 = time.perf_counter()
     summary = build_json_summary()
     build_s = time.perf_counter() - t0
     json_str = json.dumps(summary, indent=2)
     json_bytes = len(json_str.encode("utf-8"))
     logger.info(
-        "Weekly summary: build %.2fs, JSON %d bytes, total_posts=%s (full_posts=%s)",
+        "Weekly summary: build %.2fs, JSON %d bytes, total_posts=%s",
         build_s,
         json_bytes,
         summary.get("total_posts"),
-        WEEKLY_REPORT_INCLUDE_FULL_POSTS,
     )
     body = build_email_body(summary)
     html_body = build_email_html(summary)

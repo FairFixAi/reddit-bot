@@ -5,11 +5,7 @@ Run periodically (e.g. after each collection or on a schedule).
 import logging
 import sys
 
-from utils.config import (
-    CLASSIFICATION_BATCH_SIZE,
-    CLASSIFICATION_MAX_SELFTEXT_CHARS,
-    OPENAI_API_KEY,
-)
+from utils.config import CLASSIFICATION_BATCH_SIZE
 from data.db import get_posts_without_classification, insert_classification
 from jobs.classifier import classify_post
 
@@ -22,9 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    if not OPENAI_API_KEY:
-        logger.error("OPENAI_API_KEY not set in .env")
-        sys.exit(1)
     posts = get_posts_without_classification(limit=CLASSIFICATION_BATCH_SIZE)
     if not posts:
         logger.info("No unclassified posts")
@@ -32,12 +25,9 @@ def main() -> None:
     logger.info("Classifying %d post(s) (batch limit %s)", len(posts), CLASSIFICATION_BATCH_SIZE)
     for p in posts:
         try:
-            body = p["selftext"] or ""
-            if CLASSIFICATION_MAX_SELFTEXT_CHARS and len(body) > CLASSIFICATION_MAX_SELFTEXT_CHARS:
-                body = body[: CLASSIFICATION_MAX_SELFTEXT_CHARS]
             row = classify_post(
                 title=p["title"] or "",
-                selftext=body,
+                selftext=p["selftext"] or "",
                 subreddit=p["subreddit"] or "",
             )
             insert_classification(

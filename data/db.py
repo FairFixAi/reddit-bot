@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import psycopg2
 from psycopg2.extras import execute_values
 
-from utils.config import DATABASE_URL, INSERT_POSTS_CHUNK_SIZE
+from utils.config import DATABASE_URL, PIPELINE_MAX_BATCH
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +136,10 @@ def _insert_posts_one_chunk(tuples: list[tuple]) -> int:
 
 
 def insert_posts(rows: list[dict]) -> int:
-    """Insert posts; skip duplicates by (source, external_id). Chunks with a commit per chunk to limit peak memory."""
+    """Insert posts. Duplicates (same source + native external_id) are skipped silently via ON CONFLICT DO NOTHING. Chunks commits for peak memory."""
     if not rows:
         return 0
-    chunk = max(1, INSERT_POSTS_CHUNK_SIZE)
+    chunk = max(1, PIPELINE_MAX_BATCH)
     tuples = _rows_to_insert_tuples(rows)
     total_inserted = 0
     n_chunks = (len(tuples) + chunk - 1) // chunk
@@ -160,7 +160,7 @@ def insert_posts(rows: list[dict]) -> int:
 
 
 def get_posts_without_classification(limit: int | None = None) -> list[dict]:
-    """Return posts that have no row in post_classifications. If limit is None, returns all unclassified posts (avoid on production workers; use a batch limit from CLASSIFICATION_BATCH_SIZE)."""
+    """Return posts that have no row in post_classifications. If limit is None, returns all unclassified posts (avoid on production workers; use PIPELINE_MAX_BATCH from the caller)."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             sql = """
@@ -471,7 +471,7 @@ def get_top_opportunities_report_window(days: int = 7, limit: int = 10) -> list[
 
 
 def get_classified_posts_for_week(days: int = 7) -> list[dict]:
-    """Fetch posts + classifications for the weekly report: created in last N days OR classified in last N days (so backlog shows up). Requires post_classifications.classified_at (e.g. DEFAULT NOW()). Heavy: includes selftext; use only for optional full export when WEEKLY_REPORT_INCLUDE_FULL_POSTS is enabled."""
+    """Fetch posts + classifications for the report window (includes selftext). For ad-hoc tools only; weekly email uses SQL summaries."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(

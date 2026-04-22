@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from utils.config import (
     FETCH_INTERVAL_MINUTES,
     CLASSIFICATION_INTERVAL_MINUTES,
-    OPENAI_API_KEY,
+    RETENTION_RUN_INTERVAL_HOURS,
 )
 
 logging.basicConfig(
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Intervals in seconds
 COLLECTION_INTERVAL = FETCH_INTERVAL_MINUTES * 60
 CLASSIFICATION_INTERVAL = CLASSIFICATION_INTERVAL_MINUTES * 60
-RETENTION_INTERVAL = 24 * 60 * 60  # once per day
+RETENTION_INTERVAL = RETENTION_RUN_INTERVAL_HOURS * 60 * 60
 
 # Last run timestamps (0 = run soon)
 _last_collection = 0.0
@@ -42,8 +42,6 @@ def _run_collection() -> None:
 
 
 def _run_classification() -> None:
-    if not OPENAI_API_KEY:
-        return
     try:
         from jobs.run_classification import main as classification_main
         classification_main()

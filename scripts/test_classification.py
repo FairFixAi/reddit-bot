@@ -5,7 +5,6 @@ Uses OPENAI_API_KEY from .env. No email; just logs results.
 import logging
 import sys
 
-from utils.config import OPENAI_API_KEY
 from data.db import get_posts_without_classification, insert_classification
 from jobs.classifier import classify_post
 
@@ -20,9 +19,6 @@ TEST_LIMIT = 2
 
 
 def main() -> None:
-    if not OPENAI_API_KEY:
-        logger.error("OPENAI_API_KEY not set in .env")
-        sys.exit(1)
     posts = get_posts_without_classification(limit=TEST_LIMIT)
     if not posts:
         logger.info("No unclassified posts; nothing to test")
