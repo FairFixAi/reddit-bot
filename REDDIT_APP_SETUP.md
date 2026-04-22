@@ -174,7 +174,11 @@ Please find attached the reddit-bot project as a zip file. It includes the full 
 What it does: Collects posts from Reddit (RSS or API), stores them in your Supabase database, classifies them with OpenAI, applies 90-day retention, and sends you a weekly email report (HTML + JSON) every Monday to the address you set.
 
 HOST AND RUN ON RENDER:
-1. Unzip the file and upload the reddit-bot folder to a new GitHub repository. In Render, create a project, then inside the project create a Background Worker, select "public Git repository" and set the URL to your Github repository URL (if public) or use "Git provider" (if private).
+1. Unzip the file and upload the reddit-bot folder to a new GitHub repository. In Render, create a project, then create a **Web Service** (free tier is fine), connect the Git repository (if the repo root is not the `reddit-bot` folder, set **Root Directory** to `reddit-bot`).
+
+   **`main.py` and `PORT`:** Render injects **`PORT`** for Web Services (you normally **do not** add `PORT` yourself in Environment). When `PORT` is set, the app starts a minimal HTTP listener on `0.0.0.0:$PORT` (responds `ok` to `GET /`) so the deploy health check passes, and runs the Reddit scheduler in a **background thread**. Set **`PYTHONUNBUFFERED=1`** in Environment (see `.env.example`) for line-buffered logs.
+
+   Optional: use this repo’s **`render.yaml`** with **Blueprint** to provision a `type: web` service (`plan: free`).
 
 2. Select the stage, git branch to your preference.
 Build command: pip install -r requirements.txt
@@ -192,6 +196,9 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your_sender_email@gmail.com
 SMTP_PASSWORD=your_gmail_app_password
+
+PYTHONUNBUFFERED=1
+(recommended for live logs; matches `.env.example`.)
 
 USE_RSS=true
 SUBREDDIT_LIST=MechanicAdvice,cars,Cartalk,AutoRepair,AskMechanics,UsedCars,lemonlaw,autobody,askcarsales,buyingacar
@@ -223,11 +230,14 @@ REDDIT_USER_AGENT=RedditBot/1.0 (by your_reddit_username)
 
 When USE_RSS=false, set real REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT instead of unused.
 
-4. Deploy. The worker will run continuously: it collects and classifies on schedule, runs retention daily, and sends the weekly report only on Mondays to REPORT_EMAIL_TO.
+4. Deploy. The service stays up: health traffic hits `$PORT` while the bot collects and classifies on schedule, runs retention per `RETENTION_RUN_INTERVAL_HOURS`, and sends the weekly report only on Mondays (UTC) to `REPORT_EMAIL_TO`.
 
-5. Check: In Supabase, confirm new rows in posts and post_classifications. In Render Logs, you should see collection and classification messages.
+5. Check: In Supabase, confirm new rows in posts and post_classifications. In Render Logs, look for `Listening on 0.0.0.0:` and `Reddit Bot scheduler started.`
 
+#### Troubleshooting: deploy fails, “No open ports detected”
 
+1. Confirm the service **Start Command** is `python main.py` and you deployed a build that includes the current `main.py` (it must bind `$PORT` when set).
+2. In logs, you should see **`Listening on 0.0.0.0:<port>`**. If not, check that Render is a **Web Service** (not a misconfigured static site) and that nothing overrides `PORT`.
 
 #### Troubleshooting: `Network is unreachable` to Supabase (IPv6)
 
@@ -242,9 +252,9 @@ then DNS resolved Supabase to **IPv6**, and Render’s network path to that addr
 2. Click **Connect** at the top of the project page (green / primary button).
 3. In the Connect dialog, choose the connection type:
    - **Session pooler** (Supavisor session mode) — **use this for Render** when the direct URL fails with IPv6 / “Network is unreachable”. It uses a host like `aws-0-<region>.pooler.supabase.com` on port **5432** and a username like `postgres.<project-ref>` (copy exactly what the dashboard shows).
-   - **Transaction pooler** — for short-lived / serverless clients; often `db.<project-ref>.supabase.co` port **6543** with user `postgres`. This app is a long-running worker; **prefer Session pooler** unless Supabase’s docs for your case say otherwise.
+   - **Transaction pooler** — for short-lived / serverless clients; often `db.<project-ref>.supabase.co` port **6543** with user `postgres`. This app holds long-lived DB usage from the scheduler thread; **prefer Session pooler** unless Supabase’s docs for your case say otherwise.
 4. Copy the **URI** (or connection string) from that panel — do not hand-edit host/user unless you know what you’re doing.
-5. Set it as `DATABASE_URL` on Render (and in `.env` if local). Restart the worker.
+5. Set it as `DATABASE_URL` on Render (and in `.env` if local). Restart the web service.
 
 Official guide (methods, ports, examples):  
 https://supabase.com/docs/guides/database/connecting-to-postgres  

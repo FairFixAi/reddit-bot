@@ -4,7 +4,7 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 ## Project structure
 
-- **`main.py`** – Entrypoint. Run this on the server; it runs collection, classification, retention, and weekly report on schedule.
+- **`main.py`** – Entrypoint. Run this on the server; it runs collection, classification, retention, and weekly report on schedule. If the `PORT` env var is set (Render **Web Service**), it also binds a minimal HTTP `/` health endpoint on that port while the scheduler runs in a background thread.
 - **`utils/`** – `config.py` (loads `.env` from project root).
 - **`data/`** – `db.py`, `rss_fetcher.py`, `reddit_client.py`, `schema.sql` (posts table).
 - **`jobs/`** – `run_collection.py`, `run_classification.py`, `run_retention.py`, `weekly_report.py`, `classifier.py`.
@@ -28,7 +28,7 @@ Reddit ingestion, storage, AI classification, and weekly report.
    python main.py
    ```
 
-   This runs indefinitely on schedule from env (`FETCH_INTERVAL_MINUTES`, `CLASSIFICATION_INTERVAL_MINUTES`, `RETENTION_RUN_INTERVAL_HOURS`, `RETENTION_DAYS`, etc.).
+   This runs indefinitely on schedule from env (`FETCH_INTERVAL_MINUTES`, `CLASSIFICATION_INTERVAL_MINUTES`, `RETENTION_RUN_INTERVAL_HOURS`, `RETENTION_DAYS`, etc.). **On Render, use a [Web Service](https://render.com/docs/web-services)** (free tier works): Render sets `PORT`; `main.py` listens for health checks and runs the bot in a background thread. Set **`PYTHONUNBUFFERED=1`** in Render (see `.env.example`). See `REDDIT_APP_SETUP.md` and `render.yaml`.
 
 **Weekly report (memory-safe):** Counts and breakdowns from SQL; compact JSON attachment. Window and sample caps use `WEEKLY_REPORT_*` env vars.
 

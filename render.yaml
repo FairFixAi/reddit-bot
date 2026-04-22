@@ -1,0 +1,10 @@
+# Render Web Service (free tier eligible). The app binds HTTP on $PORT for health checks
+# and runs the Reddit bot scheduler in a background thread. Start command: python main.py
+# https://render.com/docs/web-services
+services:
+  - type: web
+    name: reddit-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    plan: free
