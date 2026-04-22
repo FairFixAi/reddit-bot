@@ -171,18 +171,18 @@ The developer application is registered under the Reddit account of the project 
 ### RENDER DEPLOYMENT
 Please find attached the reddit-bot project as a zip file. It includes the full code for deployment.
 
-What it does: Collects posts from Reddit (RSS or API), stores them in your Supabase database, classifies them with OpenAI, applies 90-day retention, and sends you a weekly email report (HTML + JSON) every Monday to the address you set.
+What it does: On each scheduled **tick**, collects posts from Reddit (RSS or API), stores them in Supabase, classifies with OpenAI, and applies retention (`python main.py` runs once and exits). A **separate** weekly cron sends the email report (HTML + JSON) via `python -m jobs.weekly_report`.
 
 HOST AND RUN ON RENDER:
-1. Unzip the file and upload the reddit-bot folder to a new GitHub repository. In Render, create a project, then create a **Web Service** (free tier is fine), connect the Git repository (if the repo root is not the `reddit-bot` folder, set **Root Directory** to `reddit-bot`).
+1. Unzip the file and upload the reddit-bot folder to a new GitHub repository. In Render, create **Cron Jobs** (not a long-lived Web Service for `main.py`). Connect the Git repository (if the repo root is not the `reddit-bot` folder, set **Root Directory** to `reddit-bot`).
 
-   **`main.py` and `PORT`:** Render injects **`PORT`** for Web Services (you normally **do not** add `PORT` yourself in Environment). When `PORT` is set, the app starts a minimal HTTP listener on `0.0.0.0:$PORT` (responds `ok` to `GET /`) so the deploy health check passes, and runs the Reddit scheduler in a **background thread**. Set **`PYTHONUNBUFFERED=1`** in Environment (see `.env.example`) for line-buffered logs.
+   **`main.py`:** Each cron run executes **one** cycle (collect → classify → retain) and **exits**, so memory is released between runs. Set **`PYTHONUNBUFFERED=1`** in Environment (see `.env.example`) for line-buffered logs.
 
-   Optional: use this repo’s **`render.yaml`** with **Blueprint** to provision a `type: web` service (`plan: free`).
+   **Weekly email:** Use a **second** cron with start command `python -m jobs.weekly_report` (e.g. `0 9 * * 1` for 09:00 UTC Mondays). Do not rely on `main.py` for the weekly send when the tick cron runs every few minutes — you would duplicate emails on Mondays.
 
-2. Select the stage, git branch to your preference.
-Build command: pip install -r requirements.txt
-Start command: python main.py
+   Optional: use this repo’s **`render.yaml`** with **Blueprint** to provision two `type: cron` services (`reddit-bot-tick` and `reddit-bot-weekly-report`). Cron jobs use a paid instance type on Render (e.g. **Starter**), not the free web tier.
+
+2. For each cron service: select branch, **Build command:** `pip install -r requirements.txt`, **Start command:** `python main.py` (tick) or `python -m jobs.weekly_report` (weekly).
 
 3. Open Environment and add these variables. Use the exact key names and set your own values OR upload the .env from source code:
 
@@ -205,8 +205,8 @@ SUBREDDIT_LIST=MechanicAdvice,cars,Cartalk,AutoRepair,AskMechanics,UsedCars,lemo
 RSS_FEED_URLS=DERIVE_FROM_SUBREDDIT_LIST
 (or comma-separated full RSS URLs instead of DERIVE_FROM_SUBREDDIT_LIST)
 
-FETCH_INTERVAL_MINUTES=5
-CLASSIFICATION_INTERVAL_MINUTES=60
+FETCH_INTERVAL_MINUTES=360
+CLASSIFICATION_INTERVAL_MINUTES=360
 RETENTION_DAYS=90
 RETENTION_RUN_INTERVAL_HOURS=24
 POSTS_PER_RUN=50
@@ -230,14 +230,13 @@ REDDIT_USER_AGENT=RedditBot/1.0 (by your_reddit_username)
 
 When USE_RSS=false, set real REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT instead of unused.
 
-4. Deploy. The service stays up: health traffic hits `$PORT` while the bot collects and classifies on schedule, runs retention per `RETENTION_RUN_INTERVAL_HOURS`, and sends the weekly report only on Mondays (UTC) to `REPORT_EMAIL_TO`.
+4. Deploy. After each tick cron fires, logs should show **`Reddit Bot single run starting`** and **`Reddit Bot single run finished; exiting.`** Process memory returns to zero until the next run.
 
-5. Check: In Supabase, confirm new rows in posts and post_classifications. In Render Logs, look for `Listening on 0.0.0.0:` and `Reddit Bot scheduler started.`
+5. Check: In Supabase, confirm new rows in posts and post_classifications. **Tick cron example:** `0 */6 * * *` (every 6 hours at :00 UTC) with **`FETCH_INTERVAL_MINUTES=360`** and **`CLASSIFICATION_INTERVAL_MINUTES=360`** in env so docs/logs match. Use a tighter cron (e.g. `*/15 * * * *`) if you need fresher Reddit data.
 
-#### Troubleshooting: deploy fails, “No open ports detected”
+#### Troubleshooting: “No open ports detected”
 
-1. Confirm the service **Start Command** is `python main.py` and you deployed a build that includes the current `main.py` (it must bind `$PORT` when set).
-2. In logs, you should see **`Listening on 0.0.0.0:<port>`**. If not, check that Render is a **Web Service** (not a misconfigured static site) and that nothing overrides `PORT`.
+That message applies to **Web Services**. This app’s production entrypoint for the bot is **Cron** (`python main.py` once per schedule); it does not need an HTTP port. If you still use a Web Service for something else, it must bind `$PORT` — that pattern is not used by `main.py` anymore.
 
 #### Troubleshooting: `Network is unreachable` to Supabase (IPv6)
 
@@ -252,9 +251,9 @@ then DNS resolved Supabase to **IPv6**, and Render’s network path to that addr
 2. Click **Connect** at the top of the project page (green / primary button).
 3. In the Connect dialog, choose the connection type:
    - **Session pooler** (Supavisor session mode) — **use this for Render** when the direct URL fails with IPv6 / “Network is unreachable”. It uses a host like `aws-0-<region>.pooler.supabase.com` on port **5432** and a username like `postgres.<project-ref>` (copy exactly what the dashboard shows).
-   - **Transaction pooler** — for short-lived / serverless clients; often `db.<project-ref>.supabase.co` port **6543** with user `postgres`. This app holds long-lived DB usage from the scheduler thread; **prefer Session pooler** unless Supabase’s docs for your case say otherwise.
+   - **Transaction pooler** — for short-lived / serverless clients; often `db.<project-ref>.supabase.co` port **6543** with user `postgres`. Each cron run uses short-lived connections; **prefer Session pooler** unless Supabase’s docs for your case say otherwise.
 4. Copy the **URI** (or connection string) from that panel — do not hand-edit host/user unless you know what you’re doing.
-5. Set it as `DATABASE_URL` on Render (and in `.env` if local). Restart the web service.
+5. Set it as `DATABASE_URL` on Render (and in `.env` if local). Redeploy or trigger the next cron run.
 
 Official guide (methods, ports, examples):  
 https://supabase.com/docs/guides/database/connecting-to-postgres  

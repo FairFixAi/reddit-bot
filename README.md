@@ -4,7 +4,7 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 ## Project structure
 
-- **`main.py`** – Entrypoint. Run this on the server; it runs collection, classification, retention, and weekly report on schedule. If the `PORT` env var is set (Render **Web Service**), it also binds a minimal HTTP `/` health endpoint on that port while the scheduler runs in a background thread.
+- **`main.py`** – Entrypoint for **one** run: collection → classification → retention, then **exits**. Schedule it with **Render Cron** (or another scheduler) so each invocation is a fresh process (flat memory). Weekly email is **`python -m jobs.weekly_report`** on its own cron (see `render.yaml`).
 - **`utils/`** – `config.py` (loads `.env` from project root).
 - **`data/`** – `db.py`, `rss_fetcher.py`, `reddit_client.py`, `schema.sql` (posts table).
 - **`jobs/`** – `run_collection.py`, `run_classification.py`, `run_retention.py`, `weekly_report.py`, `classifier.py`.
@@ -22,13 +22,11 @@ Reddit ingestion, storage, AI classification, and weekly report.
    pip install -r requirements.txt
    ```
 
-3. **Production: run once on the server**
+3. **Production: schedule `python main.py` (cron)**
 
-   ```bash
-   python main.py
-   ```
+   Each invocation runs **once** and exits (no `while True` in `main.py`). Use **[Render Cron Jobs](https://render.com/docs/cronjobs)** (Starter+). Example tick: **`0 */6 * * *`** (every 6 hours) with **`FETCH_INTERVAL_MINUTES=360`** and **`CLASSIFICATION_INTERVAL_MINUTES=360`** in env (`render.yaml` + `.env.example` match that). Set **`PYTHONUNBUFFERED=1`** on Render.
 
-   This runs indefinitely on schedule from env (`FETCH_INTERVAL_MINUTES`, `CLASSIFICATION_INTERVAL_MINUTES`, `RETENTION_RUN_INTERVAL_HOURS`, `RETENTION_DAYS`, etc.). **On Render, use a [Web Service](https://render.com/docs/web-services)** (free tier works): Render sets `PORT`; `main.py` listens for health checks and runs the bot in a background thread. Set **`PYTHONUNBUFFERED=1`** in Render (see `.env.example`). See `REDDIT_APP_SETUP.md` and `render.yaml`.
+   Add a **second** cron for the weekly email: `python -m jobs.weekly_report` (example: Mondays 09:00 UTC in `render.yaml`). See `REDDIT_APP_SETUP.md`.
 
 **Weekly report (memory-safe):** Counts and breakdowns from SQL; compact JSON attachment. Window and sample caps use `WEEKLY_REPORT_*` env vars.
 
@@ -44,7 +42,7 @@ From the `reddit-bot` directory:
 
 | Command | Purpose |
 |--------|---------|
-| `python -m jobs.run_collection` | One collection cycle (then exits; or loops if run as script) |
+| `python -m jobs.run_collection` | One collection cycle, then exits |
 | `python -m jobs.run_classification` | Classify unclassified posts (batch) |
 | `python -m jobs.run_retention` | Delete posts older than `RETENTION_DAYS` (from `.env`) |
 | `python -m jobs.weekly_report` | Build summary for `WEEKLY_REPORT_DAYS` and email to `REPORT_EMAIL_TO` |

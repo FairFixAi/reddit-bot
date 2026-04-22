@@ -1,10 +1,18 @@
-# Render Web Service (free tier eligible). The app binds HTTP on $PORT for health checks
-# and runs the Reddit bot scheduler in a background thread. Start command: python main.py
-# https://render.com/docs/web-services
+# Render Cron Jobs — each run starts a fresh process and exits (flat memory between runs).
+# Default tick: every 6 hours (adjust schedule + FETCH_/CLASSIFICATION_ env to match).
+# Cron is not on Render’s free web tier; see https://render.com/docs/cronjobs
 services:
-  - type: web
-    name: reddit-bot
+  - type: cron
+    name: reddit-bot-tick
     runtime: python
+    schedule: "0 */6 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
-    plan: free
+    plan: starter
+  - type: cron
+    name: reddit-bot-weekly-report
+    runtime: python
+    schedule: "0 9 * * 1"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m jobs.weekly_report
+    plan: starter

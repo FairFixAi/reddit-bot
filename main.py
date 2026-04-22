@@ -1,24 +1,18 @@
 """
 Reddit Bot – single entrypoint for production.
-Run once on the server; handles collection, classification, retention, and weekly report on schedule.
 
-On Render **Web Service**, `PORT` is set: a tiny HTTP server binds for health checks while the
-scheduler runs in a background thread. Locally, omit `PORT` to run the scheduler only (no HTTP).
+Each process runs **one** cycle (collection → classification → retention) and **exits**.
+Use **Render Cron Jobs** (or another scheduler) to invoke `python main.py` on your desired cadence so
+memory is released between runs.
+
+Weekly email is **not** included here (would repeat if this job ran every few minutes on Monday).
+Schedule `python -m jobs.weekly_report` separately (e.g. once per Monday UTC). See README and `render.yaml`.
 """
 from __future__ import annotations
 
 import logging
-import os
-import threading
-import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from datetime import date, datetime, timezone
 
-from utils.config import (
-    FETCH_INTERVAL_MINUTES,
-    CLASSIFICATION_INTERVAL_MINUTES,
-    RETENTION_RUN_INTERVAL_HOURS,
-)
+from utils.config import CLASSIFICATION_INTERVAL_MINUTES, FETCH_INTERVAL_MINUTES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,31 +20,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
-
-# Intervals in seconds
-COLLECTION_INTERVAL = FETCH_INTERVAL_MINUTES * 60
-CLASSIFICATION_INTERVAL = CLASSIFICATION_INTERVAL_MINUTES * 60
-RETENTION_INTERVAL = RETENTION_RUN_INTERVAL_HOURS * 60 * 60
-
-# Last run timestamps (0 = run soon)
-_last_collection = 0.0
-_last_classification = 0.0
-_last_retention = 0.0
-# Weekly report: only on Monday (UTC); last date we sent so we send at most once per Monday
-_last_weekly_report_date: date | None = None
-
-
-class _HealthHandler(BaseHTTPRequestHandler):
-    """Minimal handler so Render Web Service sees an open port."""
-
-    def log_message(self, format: str, *args) -> None:
-        pass  # avoid noisy per-request logs on health checks
-
-    def do_GET(self) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"ok\n")
 
 
 def _run_collection() -> None:
@@ -81,60 +50,18 @@ def _run_retention() -> None:
         logger.exception("Retention failed: %s", e)
 
 
-def _run_weekly_report() -> None:
-    try:
-        from jobs.weekly_report import main as report_main
-
-        report_main()
-    except Exception as e:
-        logger.exception("Weekly report failed: %s", e)
-
-
-def scheduler_loop() -> None:
-    global _last_collection, _last_classification, _last_retention, _last_weekly_report_date
+def main() -> None:
     logger.info(
-        "Reddit Bot scheduler started. Collection every %s min, classification every %s min, "
-        "retention per RETENTION_RUN_INTERVAL_HOURS, weekly report on Mondays (UTC) only.",
+        "Reddit Bot single run starting (collection → classification → retention). "
+        "Align your cron schedule with FETCH_INTERVAL_MINUTES=%s and "
+        "CLASSIFICATION_INTERVAL_MINUTES=%s in .env.",
         FETCH_INTERVAL_MINUTES,
         CLASSIFICATION_INTERVAL_MINUTES,
     )
-    while True:
-        now = time.time()
-        if now - _last_collection >= COLLECTION_INTERVAL:
-            _run_collection()
-            _last_collection = now
-        if now - _last_classification >= CLASSIFICATION_INTERVAL:
-            _run_classification()
-            _last_classification = now
-        if now - _last_retention >= RETENTION_INTERVAL:
-            _run_retention()
-            _last_retention = now
-        today_utc = datetime.now(timezone.utc).date()
-        if today_utc.weekday() == 0 and _last_weekly_report_date != today_utc:
-            _run_weekly_report()
-            _last_weekly_report_date = today_utc
-        time.sleep(60)
-
-
-def _run_health_server(port: int) -> None:
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    logger.info("Listening on 0.0.0.0:%s for health checks", port)
-    server.serve_forever()
-
-
-def main() -> None:
-    port_raw = os.environ.get("PORT")
-    if port_raw:
-        port = int(port_raw)
-        worker = threading.Thread(
-            target=scheduler_loop,
-            name="reddit-bot-scheduler",
-            daemon=True,
-        )
-        worker.start()
-        _run_health_server(port)
-    else:
-        scheduler_loop()
+    _run_collection()
+    _run_classification()
+    _run_retention()
+    logger.info("Reddit Bot single run finished; exiting.")
 
 
 if __name__ == "__main__":

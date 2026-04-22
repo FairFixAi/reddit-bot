@@ -442,8 +442,7 @@ def main() -> None:
     if send_report_email(body, json_str, to_email, html_body=html_body):
         logger.info("Weekly report sent")
     else:
-        # Do not exit: killing the process would stop collection/classification until the host restarts.
-        logger.error("Weekly report email failed; worker continues. Fix SMTP/REPORT_EMAIL_TO and check logs.")
+        logger.error("Weekly report email failed. Fix SMTP/REPORT_EMAIL_TO and check logs.")
     # Optionally write JSON to file for inspection
     out_path = "weekly_summary.json"
     with open(out_path, "w") as f:

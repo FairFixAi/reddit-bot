@@ -1,13 +1,12 @@
 """
 Run ingestion: fetch from Reddit RSS (default) or Reddit API, then store in DB.
-Used by main.py on a schedule. Can also be run standalone (loops every FETCH_INTERVAL_MINUTES).
+Used by main.py each cron tick. Standalone: ``python -m jobs.run_collection`` runs one cycle and exits.
 """
 import logging
 import time
 
 from utils.config import (
     USE_RSS,
-    FETCH_INTERVAL_MINUTES,
     PIPELINE_MAX_BATCH,
     RSS_DELAY_BETWEEN_FEEDS_SEC,
     RSS_MAX_POSTS_PER_RUN,
@@ -77,14 +76,12 @@ def run_once() -> int:
 
 
 def main() -> None:
-    logger.info("Collection loop: every %s minutes", FETCH_INTERVAL_MINUTES)
-    while True:
-        try:
-            n = run_once()
-            logger.info("Collection: %d new posts stored", n)
-        except Exception as e:
-            logger.exception("Collection failed: %s", e)
-        time.sleep(FETCH_INTERVAL_MINUTES * 60)
+    """One collection cycle then exit (for cron or manual runs)."""
+    try:
+        n = run_once()
+        logger.info("Collection: %d new posts stored", n)
+    except Exception as e:
+        logger.exception("Collection failed: %s", e)
 
 
 if __name__ == "__main__":
