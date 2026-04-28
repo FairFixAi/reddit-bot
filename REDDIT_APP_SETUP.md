@@ -171,18 +171,18 @@ The developer application is registered under the Reddit account of the project 
 ### RENDER DEPLOYMENT
 Please find attached the reddit-bot project as a zip file. It includes the full code for deployment.
 
-What it does: On each scheduled **tick**, collects posts from Reddit (RSS or API), stores them in Supabase, classifies with OpenAI, and applies retention (`python main.py` runs once and exits). A **separate** weekly cron sends the email report (HTML + JSON) via `python -m jobs.weekly_report`.
+What it does: On each scheduled **tick**, collects posts from Reddit (RSS or API), stores them in Supabase, classifies with OpenAI, and applies retention (`python main.py` runs once and exits). Weekly email is also handled by `main.py` on Mondays (UTC), with a DB-backed once-per-week guard.
 
 HOST AND RUN ON RENDER:
 1. Unzip the file and upload the reddit-bot folder to a new GitHub repository. In Render, create **Cron Jobs** (not a long-lived Web Service for `main.py`). Connect the Git repository (if the repo root is not the `reddit-bot` folder, set **Root Directory** to `reddit-bot`).
 
    **`main.py`:** Each cron run executes **one** cycle (collect → classify → retain) and **exits**, so memory is released between runs. Set **`PYTHONUNBUFFERED=1`** in Environment (see `.env.example`) for line-buffered logs.
 
-   **Weekly email:** Use a **second** cron with start command `python -m jobs.weekly_report` (e.g. `0 9 * * 1` for 09:00 UTC Mondays). Do not rely on `main.py` for the weekly send when the tick cron runs every few minutes — you would duplicate emails on Mondays.
+   **Weekly email behavior:** `main.py` checks Monday (UTC) and uses a DB lock so only one weekly send can happen per ISO week, even if cron runs multiple times on Monday.
 
-   Optional: use this repo’s **`render.yaml`** with **Blueprint** to provision two `type: cron` services (`reddit-bot-tick` and `reddit-bot-weekly-report`). Cron jobs use a paid instance type on Render (e.g. **Starter**), not the free web tier.
+   Optional: use this repo’s **`render.yaml`** with **Blueprint** to provision one `type: cron` service (`reddit-bot-tick`). Cron jobs use a paid instance type on Render (e.g. **Starter**), not the free web tier.
 
-2. For each cron service: select branch, **Build command:** `pip install -r requirements.txt`, **Start command:** `python main.py` (tick) or `python -m jobs.weekly_report` (weekly).
+2. For the cron service: select branch, **Build command:** `pip install -r requirements.txt`, **Start command:** `python main.py`.
 
 3. Open Environment and add these variables. Use the exact key names and set your own values OR upload the .env from source code:
 

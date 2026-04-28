@@ -4,7 +4,7 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 ## Project structure
 
-- **`main.py`** – Entrypoint for **one** run: collection → classification → retention, then **exits**. Schedule it with **Render Cron** (or another scheduler) so each invocation is a fresh process (flat memory). Weekly email is **`python -m jobs.weekly_report`** on its own cron (see `render.yaml`).
+- **`main.py`** – Entrypoint for **one** run: collection → classification → retention, then **exits**. Schedule it with **Render Cron** (or another scheduler) so each invocation is a fresh process (flat memory). Weekly email is triggered from `main.py` on Mondays (UTC) with a DB-backed once-per-week guard.
 - **`utils/`** – `config.py` (loads `.env` from project root).
 - **`data/`** – `db.py`, `rss_fetcher.py`, `reddit_client.py`, `schema.sql` (posts table).
 - **`jobs/`** – `run_collection.py`, `run_classification.py`, `run_retention.py`, `weekly_report.py`, `classifier.py`.
@@ -26,7 +26,7 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
    Each invocation runs **once** and exits (no `while True` in `main.py`). Use **[Render Cron Jobs](https://render.com/docs/cronjobs)** (Starter+). Example tick: **`0 */6 * * *`** (every 6 hours) with **`FETCH_INTERVAL_MINUTES=360`** and **`CLASSIFICATION_INTERVAL_MINUTES=360`** in env (`render.yaml` + `.env.example` match that). Set **`PYTHONUNBUFFERED=1`** on Render.
 
-   Add a **second** cron for the weekly email: `python -m jobs.weekly_report` (example: Mondays 09:00 UTC in `render.yaml`). See `REDDIT_APP_SETUP.md`.
+   Weekly email is handled inside `main.py` on Mondays (UTC), and guarded so only one send happens per ISO week even if Monday has multiple cron ticks. See `REDDIT_APP_SETUP.md`.
 
 **Weekly report (memory-safe):** Counts and breakdowns from SQL; compact JSON attachment. Window and sample caps use `WEEKLY_REPORT_*` env vars.
 

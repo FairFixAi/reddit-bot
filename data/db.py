@@ -245,6 +245,59 @@ def delete_posts_older_than_days(days: int) -> int:
     return deleted
 
 
+def _ensure_job_state_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.job_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+
+
+def claim_weekly_report_slot(week_key: str) -> bool:
+    """
+    Atomically claim this ISO week for weekly report sending.
+    Returns True only for the first caller in a given week.
+    """
+    with get_conn() as conn:
+        _ensure_job_state_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.job_state (key, value, updated_at)
+                VALUES ('weekly_report_week', %s, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW()
+                WHERE public.job_state.value IS DISTINCT FROM EXCLUDED.value
+                RETURNING key
+                """,
+                (week_key,),
+            )
+            row = cur.fetchone()
+            return bool(row)
+
+
+def release_weekly_report_slot(week_key: str) -> None:
+    """
+    If this process claimed a week but failed to send, release claim for retry.
+    """
+    with get_conn() as conn:
+        _ensure_job_state_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE public.job_state
+                SET value = '', updated_at = NOW()
+                WHERE key = 'weekly_report_week' AND value = %s
+                """,
+                (week_key,),
+            )
+
+
 _WEEKLY_REPORT_JOIN_WHERE = """
     FROM posts p
     JOIN post_classifications c ON c.post_id = p.id

@@ -5,12 +5,12 @@ Each process runs **one** cycle (collection → classification → retention) an
 Use **Render Cron Jobs** (or another scheduler) to invoke `python main.py` on your desired cadence so
 memory is released between runs.
 
-Weekly email is **not** included here (would repeat if this job ran every few minutes on Monday).
-Schedule `python -m jobs.weekly_report` separately (e.g. once per Monday UTC). See README and `render.yaml`.
+Weekly email is included with a DB-backed once-per-week guard, so `main.py` can be scheduled alone.
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from utils.config import CLASSIFICATION_INTERVAL_MINUTES, FETCH_INTERVAL_MINUTES
 
@@ -50,6 +50,30 @@ def _run_retention() -> None:
         logger.exception("Retention failed: %s", e)
 
 
+def _run_weekly_report_if_due() -> None:
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.weekday() != 0:  # Monday
+        return
+    iso = now_utc.isocalendar()
+    week_key = f"{iso.year}-W{iso.week:02d}"
+    try:
+        from data.db import claim_weekly_report_slot, release_weekly_report_slot
+
+        if not claim_weekly_report_slot(week_key):
+            logger.info("Weekly report already sent for %s; skipping.", week_key)
+            return
+        from jobs.weekly_report import main as weekly_report_main
+
+        weekly_report_main()
+        logger.info("Weekly report completed for %s.", week_key)
+    except Exception as e:
+        logger.exception("Weekly report failed for %s: %s", week_key, e)
+        try:
+            release_weekly_report_slot(week_key)
+        except Exception as release_err:
+            logger.exception("Failed to release weekly report slot for %s: %s", week_key, release_err)
+
+
 def main() -> None:
     logger.info(
         "Reddit Bot single run starting (collection → classification → retention). "
@@ -61,6 +85,7 @@ def main() -> None:
     _run_collection()
     _run_classification()
     _run_retention()
+    _run_weekly_report_if_due()
     logger.info("Reddit Bot single run finished; exiting.")
 
 
