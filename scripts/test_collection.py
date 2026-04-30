@@ -6,6 +6,7 @@ import logging
 import sys
 
 from jobs.run_collection import run_once
+from utils.pipeline_control import ensure_pipeline_enabled
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    ensure_pipeline_enabled()
     logger.info("Running one collection cycle (test)...")
     try:
         n = run_once()

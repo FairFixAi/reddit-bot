@@ -7,6 +7,7 @@ import logging
 import sys
 
 from jobs.weekly_report import build_json_summary, build_email_body, build_email_html, send_report_email
+from utils.pipeline_control import ensure_pipeline_enabled
 
 # Test-only recipient; production uses REPORT_EMAIL_TO from .env
 TEST_REPORT_EMAIL = "babsgodwin@gmail.com"
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    ensure_pipeline_enabled()
     logger.info("Building weekly summary (test)...")
     summary = build_json_summary()
     json_str = json.dumps(summary, indent=2)

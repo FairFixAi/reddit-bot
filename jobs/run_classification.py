@@ -5,8 +5,17 @@ Run periodically (e.g. after each collection or on a schedule).
 import logging
 import sys
 
-from utils.config import CLASSIFICATION_BATCH_SIZE
-from data.db import get_posts_without_classification, insert_classification
+from utils.config import (
+    ALLOW_HISTORICAL_REPROCESSING,
+    PROCESSING_WINDOW_DAYS,
+    effective_classification_batch_size,
+)
+from utils.pipeline_control import (
+    check_openai_budget,
+    ensure_pipeline_enabled,
+    record_openai_estimated_spend,
+)
+from data.db import get_unclassified_posts, insert_classification
 from jobs.classifier import classify_post
 
 logging.basicConfig(
@@ -18,11 +27,26 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    posts = get_posts_without_classification(limit=CLASSIFICATION_BATCH_SIZE)
+    ensure_pipeline_enabled()
+    batch_size = effective_classification_batch_size()
+    posts = get_unclassified_posts(
+        limit=batch_size,
+        include_historical=ALLOW_HISTORICAL_REPROCESSING,
+        max_age_days=PROCESSING_WINDOW_DAYS,
+    )
     if not posts:
         logger.info("No unclassified posts")
         return
-    logger.info("Classifying %d post(s) (batch limit %s)", len(posts), CLASSIFICATION_BATCH_SIZE)
+    budget = check_openai_budget(len(posts))
+    logger.info(
+        "Classifying %d post(s) (batch limit %s, estimated OpenAI cost $%.6f, weekly spent $%.6f/$%.6f)",
+        len(posts),
+        batch_size,
+        budget.estimated_cost_usd,
+        budget.weekly_spent_usd,
+        budget.weekly_budget_usd,
+    )
+    successful = 0
     for p in posts:
         try:
             row = classify_post(
@@ -45,8 +69,10 @@ def main() -> None:
                 summary=row.get("summary"),
                 suggested_action=row.get("suggested_action"),
             )
+            successful += 1
         except Exception as e:
             logger.exception("Failed to classify post_id=%s: %s", p["id"], e)
+    record_openai_estimated_spend(successful)
     logger.info("Classification run complete")
 
 

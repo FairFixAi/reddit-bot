@@ -1,4 +1,6 @@
 """Fetch public posts from Reddit RSS feeds (no API credentials required)."""
+from __future__ import annotations
+
 import logging
 import re
 import time
@@ -60,7 +62,9 @@ def _http_get_feed(url: str) -> requests.Response | None:
     honors Retry-After and exponential backoff.
     """
     headers = {"User-Agent": RSS_USER_AGENT}
-    max_retries = RSS_HTTP_MAX_RETRIES
+    # Strict batch mode: one HTTP attempt only. Keep the env var for deployment compatibility,
+    # but do not perform automatic retry loops.
+    max_retries = min(RSS_HTTP_MAX_RETRIES, 1)
     base = RSS_HTTP_RETRY_BASE_SEC
     last_exc: Exception | None = None
     for attempt in range(max_retries):

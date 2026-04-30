@@ -1,11 +1,11 @@
 # Render Cron Jobs — each run starts a fresh process and exits (flat memory between runs).
-# Default tick: every 6 hours (adjust schedule + FETCH_/CLASSIFICATION_ env to match).
+# Default tick: once every 24 hours. RUN_PIPELINE must be true in the environment for the job to do work.
 # Cron is not on Render’s free web tier; see https://render.com/docs/cronjobs
 services:
   - type: cron
     name: reddit-bot-tick
     runtime: python
-    schedule: "0 */6 * * *"
+    schedule: "0 9 * * *"
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     plan: starter

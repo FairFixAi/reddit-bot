@@ -4,15 +4,15 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 ## Project structure
 
-- **`main.py`** – Entrypoint for **one** run: collection → classification → retention, then **exits**. Schedule it with **Render Cron** (or another scheduler) so each invocation is a fresh process (flat memory). Weekly email is triggered from `main.py` on Mondays (UTC) with a DB-backed once-per-week guard.
-- **`utils/`** – `config.py` (loads `.env` from project root).
+- **`main.py`** – Entrypoint for **one** controlled run: collection → classification → retention, then **exits**. It refuses to run unless `RUN_PIPELINE=true`.
+- **`utils/`** – `config.py` (loads `.env` from project root) and `pipeline_control.py` (run flag + OpenAI budget checks).
 - **`data/`** – `db.py`, `rss_fetcher.py`, `reddit_client.py`, `schema.sql` (posts table).
 - **`jobs/`** – `run_collection.py`, `run_classification.py`, `run_retention.py`, `weekly_report.py`, `classifier.py`.
 - **`scripts/`** – Test scripts (collection, classification, retention, weekly report). Test weekly report sends to a fixed test email only; production uses `REPORT_EMAIL_TO` from `.env`.
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and fill **every** key (empty values are rejected at import). Schedules, batch sizes, RSS retry policy, retention cadence, and weekly-report limits are all env-driven — see `.env.example` and `utils/config.py`.
+1. Copy `.env.example` to `.env` and fill the required keys. `OPENAI_API_KEY` may be empty while the pipeline is paused. Schedules, batch sizes, cost controls, retention cadence, and weekly-report limits are all env-driven — see `.env.example` and `utils/config.py`.
 
 2. Create a virtualenv and install dependencies:
 
@@ -24,17 +24,19 @@ Reddit ingestion, storage, AI classification, and weekly report.
 
 3. **Production: schedule `python main.py` (cron)**
 
-   Each invocation runs **once** and exits (no `while True` in `main.py`). Use **[Render Cron Jobs](https://render.com/docs/cronjobs)** (Starter+). Example tick: **`0 */6 * * *`** (every 6 hours) with **`FETCH_INTERVAL_MINUTES=360`** and **`CLASSIFICATION_INTERVAL_MINUTES=360`** in env (`render.yaml` + `.env.example` match that). Set **`PYTHONUNBUFFERED=1`** on Render.
+   Each invocation runs **once** and exits (no `while True`, background worker, or daemon). Use **[Render Cron Jobs](https://render.com/docs/cronjobs)** (Starter+). Default schedule is once every 24 hours: **`0 9 * * *`**. The process does no work unless `RUN_PIPELINE=true`; leave it `false` when paused.
 
    Weekly email is handled inside `main.py` on Mondays (UTC), and guarded so only one send happens per ISO week even if Monday has multiple cron ticks. See `REDDIT_APP_SETUP.md`.
 
 **Weekly report (memory-safe):** Counts and breakdowns from SQL; compact JSON attachment. Window and sample caps use `WEEKLY_REPORT_*` env vars.
 
-**Classification:** Batch size is `CLASSIFICATION_BATCH_SIZE`. Full `posts.selftext` is sent to the classifier (see `jobs/classifier.py` for model limits).
+**Classification:** Batch size is the lower of `CLASSIFICATION_BATCH_SIZE` and `OPENAI_MAX_RECORDS_PER_RUN`; all record caps must be <= 200. Historical/backlog classification is blocked by default: only posts inside `PROCESSING_WINDOW_DAYS` are eligible unless `ALLOW_HISTORICAL_REPROCESSING=true`. Before any OpenAI calls, the job estimates cost from `OPENAI_ESTIMATED_COST_PER_RECORD_USD`, blocks if `OPENAI_RUN_BUDGET_USD` or `OPENAI_WEEKLY_BUDGET_USD` would be exceeded, and records estimated weekly spend in `job_state`.
 
-**RSS collection (streaming):** One feed at a time → insert in chunks of `PIPELINE_MAX_BATCH` → next feed. Pauses and HTTP retries come from `RSS_DELAY_BETWEEN_FEEDS_SEC`, `RSS_HTTP_MAX_RETRIES`, and `RSS_HTTP_RETRY_BASE_SEC`. **Post body** is stored as returned by the feed (no truncation at insert).
+**RSS collection (streaming):** One feed at a time → insert in chunks of `PIPELINE_MAX_BATCH` → next feed. Pauses and HTTP retry policy come from `RSS_DELAY_BETWEEN_FEEDS_SEC`, `RSS_HTTP_MAX_RETRIES`, and `RSS_HTTP_RETRY_BASE_SEC`; set `RSS_HTTP_MAX_RETRIES=1` for no retry after the first attempt. **Post body** is stored as returned by the feed (no truncation at insert).
 
 **RSS HTTP 429 on Render:** Set a **unique** `RSS_USER_AGENT` in `.env` ([Reddit API wiki](https://github.com/reddit-archive/reddit/wiki/api)). If 429 persists, shorten `SUBREDDIT_LIST` or use explicit `RSS_FEED_URLS`, or switch to **`USE_RSS=false`** with real Reddit OAuth credentials (replace `unused` placeholders for `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`).
+
+See `PIPELINE_CONTROLS.md` for the OpenAI call audit, guarded entrypoints, and backlog controls.
 
 ## Running jobs manually
 
@@ -46,6 +48,8 @@ From the `reddit-bot` directory:
 | `python -m jobs.run_classification` | Classify unclassified posts (batch) |
 | `python -m jobs.run_retention` | Delete posts older than `RETENTION_DAYS` (from `.env`) |
 | `python -m jobs.weekly_report` | Build summary for `WEEKLY_REPORT_DAYS` and email to `REPORT_EMAIL_TO` |
+
+All commands above require `RUN_PIPELINE=true`; otherwise they fail closed before doing work.
 
 ## Test scripts (scripts/)
 

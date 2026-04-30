@@ -1,4 +1,6 @@
 """Database layer: ensure schema, insert posts (no username storage)."""
+from __future__ import annotations
+
 import logging
 from contextlib import contextmanager
 from pathlib import Path
@@ -160,7 +162,24 @@ def insert_posts(rows: list[dict]) -> int:
 
 
 def get_posts_without_classification(limit: int | None = None) -> list[dict]:
-    """Return posts that have no row in post_classifications. If limit is None, returns all unclassified posts (avoid on production workers; use PIPELINE_MAX_BATCH from the caller)."""
+    """Return posts that have no row in post_classifications.
+
+    If limit is None, returns all unclassified posts. Avoid that on production workers.
+    """
+    return get_unclassified_posts(
+        limit=limit,
+        include_historical=True,
+        max_age_days=None,
+    )
+
+
+def get_unclassified_posts(
+    limit: int | None,
+    *,
+    include_historical: bool = False,
+    max_age_days: int | None = 7,
+) -> list[dict]:
+    """Return unclassified posts with a hard limit and optional recent-window guard."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             sql = """
@@ -168,15 +187,46 @@ def get_posts_without_classification(limit: int | None = None) -> list[dict]:
                 FROM posts p
                 LEFT JOIN post_classifications c ON c.post_id = p.id
                 WHERE c.id IS NULL
-                ORDER BY p.id
                 """
+            params: list = []
+            if not include_historical and max_age_days is not None:
+                sql += " AND p.created_utc >= NOW() - INTERVAL '1 day' * %s"
+                params.append(max_age_days)
+            sql += " ORDER BY p.created_utc DESC, p.id DESC"
             if limit is not None:
                 sql += " LIMIT %s"
-                cur.execute(sql, (limit,))
-            else:
-                cur.execute(sql)
+                params.append(limit)
+            cur.execute(sql, tuple(params))
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_job_state_value(key: str, default: str = "") -> str:
+    with get_conn() as conn:
+        _ensure_job_state_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM public.job_state WHERE key = %s", (key,))
+            row = cur.fetchone()
+            return str(row[0]) if row else default
+
+
+def add_job_state_float(key: str, amount: float) -> float:
+    with get_conn() as conn:
+        _ensure_job_state_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.job_state (key, value, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET value = ((COALESCE(NULLIF(public.job_state.value, ''), '0'))::numeric + %s)::text,
+                    updated_at = NOW()
+                RETURNING value
+                """,
+                (key, str(amount), amount),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else amount
 
 
 def insert_classification(

@@ -6,6 +6,7 @@ import logging
 import sys
 
 from utils.config import RETENTION_DAYS
+from utils.pipeline_control import ensure_pipeline_enabled
 from data.db import delete_posts_older_than_days
 
 logging.basicConfig(
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    ensure_pipeline_enabled()
     deleted = delete_posts_older_than_days(RETENTION_DAYS)
     logger.info("Retention complete: %d posts removed (older than %s days)", deleted, RETENTION_DAYS)
 

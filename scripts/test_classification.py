@@ -7,6 +7,7 @@ import sys
 
 from data.db import get_posts_without_classification, insert_classification
 from jobs.classifier import classify_post
+from utils.pipeline_control import ensure_pipeline_enabled
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +20,7 @@ TEST_LIMIT = 2
 
 
 def main() -> None:
+    ensure_pipeline_enabled()
     posts = get_posts_without_classification(limit=TEST_LIMIT)
     if not posts:
         logger.info("No unclassified posts; nothing to test")

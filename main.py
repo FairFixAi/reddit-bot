@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 
 from utils.config import CLASSIFICATION_INTERVAL_MINUTES, FETCH_INTERVAL_MINUTES
+from utils.pipeline_control import ensure_pipeline_enabled
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,6 +76,7 @@ def _run_weekly_report_if_due() -> None:
 
 
 def main() -> None:
+    ensure_pipeline_enabled()
     logger.info(
         "Reddit Bot single run starting (collection → classification → retention). "
         "Align your cron schedule with FETCH_INTERVAL_MINUTES=%s and "

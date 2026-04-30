@@ -4,6 +4,8 @@ Output: topic, sentiment, emotional_intensity, financial_mention, financial_amou
         problem_category, intent, vehicle_make, vehicle_model, keywords, summary.
 Null for any field when not clearly available (no guessing).
 """
+from __future__ import annotations
+
 import json
 import logging
 from typing import Any
@@ -11,6 +13,7 @@ from typing import Any
 from openai import OpenAI
 
 from utils.config import OPENAI_API_KEY
+from utils.pipeline_control import ensure_pipeline_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +45,10 @@ Maximize classification coverage: when keywords or summary describe a problem, a
 
 def classify_post(title: str, selftext: str, subreddit: str) -> dict[str, Any]:
     """Classify one post. Returns dict with keys matching post_classifications. Uses null when not available."""
+    ensure_pipeline_enabled()
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY not set")
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = OpenAI(api_key=OPENAI_API_KEY, max_retries=0)
     user_content = f"Subreddit: r/{subreddit}\nTitle: {title}\n\nBody:\n{selftext[:4000] if selftext else '(no body)'}"
     resp = client.chat.completions.create(
         model="gpt-4o-mini",

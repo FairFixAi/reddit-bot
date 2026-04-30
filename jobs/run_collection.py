@@ -14,6 +14,7 @@ from utils.config import (
     get_subreddit_names_for_ingestion,
 )
 from data.db import insert_posts
+from utils.pipeline_control import ensure_pipeline_enabled
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +60,7 @@ def _run_rss_once_chunked() -> int:
 
 def run_once() -> int:
     """One fetch cycle. Returns number of new posts inserted."""
+    ensure_pipeline_enabled()
     if USE_RSS:
         return _run_rss_once_chunked()
     from data.reddit_client import fetch_posts_from_subreddit

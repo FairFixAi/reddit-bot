@@ -28,6 +28,7 @@ from utils.config import (
     WEEKLY_REPORT_PROBLEM_VEHICLE_SQL_LIMIT,
     WEEKLY_REPORT_URGENT_SAMPLE_LIMIT,
 )
+from utils.pipeline_control import ensure_pipeline_enabled
 from data.db import (
     count_classified_posts_in_report_window,
     count_financial_mention_in_report_window,
@@ -423,6 +424,7 @@ def send_report_email(body: str, json_str: str, to_email: str, html_body: str = 
 
 
 def main() -> None:
+    ensure_pipeline_enabled()
     logger.info("Building weekly summary (last %s days)...", WEEKLY_REPORT_DAYS)
     t0 = time.perf_counter()
     summary = build_json_summary()

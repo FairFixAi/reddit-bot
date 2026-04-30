@@ -50,3 +50,10 @@ CREATE INDEX IF NOT EXISTS idx_post_classifications_classified_at
 
 -- Optional: help the “unclassified” lookup (LEFT JOIN … WHERE c.id IS NULL)
 CREATE INDEX IF NOT EXISTS idx_post_classifications_post_id ON public.post_classifications (post_id);
+
+-- Small state table for weekly report locking and estimated OpenAI budget tracking.
+CREATE TABLE IF NOT EXISTS public.job_state (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

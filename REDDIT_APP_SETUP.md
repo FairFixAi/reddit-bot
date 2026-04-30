@@ -171,12 +171,12 @@ The developer application is registered under the Reddit account of the project 
 ### RENDER DEPLOYMENT
 Please find attached the reddit-bot project as a zip file. It includes the full code for deployment.
 
-What it does: On each scheduled **tick**, collects posts from Reddit (RSS or API), stores them in Supabase, classifies with OpenAI, and applies retention (`python main.py` runs once and exits). Weekly email is also handled by `main.py` on Mondays (UTC), with a DB-backed once-per-week guard.
+What it does: On each scheduled **tick**, and only when `RUN_PIPELINE=true`, collects posts from Reddit (RSS or API), stores them in Supabase, classifies a capped batch with OpenAI, and applies retention (`python main.py` runs once and exits). Weekly email is also handled by `main.py` on Mondays (UTC), with a DB-backed once-per-week guard.
 
 HOST AND RUN ON RENDER:
 1. Unzip the file and upload the reddit-bot folder to a new GitHub repository. In Render, create **Cron Jobs** (not a long-lived Web Service for `main.py`). Connect the Git repository (if the repo root is not the `reddit-bot` folder, set **Root Directory** to `reddit-bot`).
 
-   **`main.py`:** Each cron run executes **one** cycle (collect → classify → retain) and **exits**, so memory is released between runs. Set **`PYTHONUNBUFFERED=1`** in Environment (see `.env.example`) for line-buffered logs.
+   **`main.py`:** Each cron run executes **one** cycle (collect → classify → retain) and **exits**, so memory is released between runs. It refuses to do work unless `RUN_PIPELINE=true`. Set **`PYTHONUNBUFFERED=1`** in Environment (see `.env.example`) for line-buffered logs.
 
    **Weekly email behavior:** `main.py` checks Monday (UTC) and uses a DB lock so only one weekly send can happen per ISO week, even if cron runs multiple times on Monday.
 
@@ -186,7 +186,7 @@ HOST AND RUN ON RENDER:
 
 3. Open Environment and add these variables. Use the exact key names and set your own values OR upload the .env from source code:
 
-Set **all** variables from `.env.example` (no empty values). Highlights:
+Set the variables from `.env.example`. Keep `RUN_PIPELINE=false` while paused; set it to `true` only for approved manual or scheduled runs. Highlights:
 
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@YOUR_PROJECT_REF.supabase.co:5432/postgres
 (Prefer the **pooled** URI from Supabase if Render cannot connect — see troubleshooting below.)
@@ -198,6 +198,9 @@ SMTP_USER=your_sender_email@gmail.com
 SMTP_PASSWORD=your_gmail_app_password
 
 PYTHONUNBUFFERED=1
+RUN_PIPELINE=false
+ALLOW_HISTORICAL_REPROCESSING=false
+PROCESSING_WINDOW_DAYS=7
 (recommended for live logs; matches `.env.example`.)
 
 USE_RSS=true
@@ -205,16 +208,20 @@ SUBREDDIT_LIST=MechanicAdvice,cars,Cartalk,AutoRepair,AskMechanics,UsedCars,lemo
 RSS_FEED_URLS=DERIVE_FROM_SUBREDDIT_LIST
 (or comma-separated full RSS URLs instead of DERIVE_FROM_SUBREDDIT_LIST)
 
-FETCH_INTERVAL_MINUTES=360
-CLASSIFICATION_INTERVAL_MINUTES=360
+FETCH_INTERVAL_MINUTES=1440
+CLASSIFICATION_INTERVAL_MINUTES=1440
 RETENTION_DAYS=90
 RETENTION_RUN_INTERVAL_HOURS=24
-POSTS_PER_RUN=50
-PIPELINE_MAX_BATCH=50
-RSS_MAX_POSTS_PER_RUN=50
+POSTS_PER_RUN=150
+PIPELINE_MAX_BATCH=150
+RSS_MAX_POSTS_PER_RUN=150
 RSS_DELAY_BETWEEN_FEEDS_SEC=3.5
-CLASSIFICATION_BATCH_SIZE=50
-RSS_HTTP_MAX_RETRIES=4
+CLASSIFICATION_BATCH_SIZE=150
+OPENAI_MAX_RECORDS_PER_RUN=150
+OPENAI_RUN_BUDGET_USD=0.50
+OPENAI_WEEKLY_BUDGET_USD=2.00
+OPENAI_ESTIMATED_COST_PER_RECORD_USD=0.002
+RSS_HTTP_MAX_RETRIES=1
 RSS_HTTP_RETRY_BASE_SEC=8
 RSS_USER_AGENT=YourApp/1.0 (unique string)
 
@@ -230,9 +237,9 @@ REDDIT_USER_AGENT=RedditBot/1.0 (by your_reddit_username)
 
 When USE_RSS=false, set real REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET and REDDIT_USER_AGENT instead of unused.
 
-4. Deploy. After each tick cron fires, logs should show **`Reddit Bot single run starting`** and **`Reddit Bot single run finished; exiting.`** Process memory returns to zero until the next run.
+4. Deploy. With `RUN_PIPELINE=false`, the job fails closed before doing work. With `RUN_PIPELINE=true`, after each tick cron fires, logs should show **`Reddit Bot single run starting`** and **`Reddit Bot single run finished; exiting.`** Process memory returns to zero until the next run.
 
-5. Check: In Supabase, confirm new rows in posts and post_classifications. **Tick cron example:** `0 */6 * * *` (every 6 hours at :00 UTC) with **`FETCH_INTERVAL_MINUTES=360`** and **`CLASSIFICATION_INTERVAL_MINUTES=360`** in env so docs/logs match. Use a tighter cron (e.g. `*/15 * * * *`) if you need fresher Reddit data.
+5. Check: In Supabase, confirm new rows in posts and post_classifications. **Tick cron example:** `0 9 * * *` (daily at 09:00 UTC) with **`FETCH_INTERVAL_MINUTES=1440`** and **`CLASSIFICATION_INTERVAL_MINUTES=1440`** in env so docs/logs match.
 
 #### Troubleshooting: “No open ports detected”
 
